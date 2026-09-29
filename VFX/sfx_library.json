@@ -1,0 +1,92 @@
+[
+  {
+    "category": "impacts",
+    "source": "Impacts/Metal Hit - Free Sound Effect.mp3",
+    "file": "sfx_cut/impacts/metal_hit_001.wav",
+    "start_s": 2.399,
+    "end_s": 3.553,
+    "duration_s": 1.154,
+    "mean_db": -16.8,
+    "max_db": 0.0
+  },
+  {
+    "category": "pops",
+    "source": "Pops & clicks/Cute Pop Sound Effects.mp3",
+    "file": "sfx_cut/pops/pops_002.wav",
+    "start_s": 2.742,
+    "end_s": 2.965,
+    "duration_s": 0.223,
+    "mean_db": -29.8,
+    "max_db": -10.7
+  },
+  {
+    "category": "pops",
+    "source": "Pops & clicks/Cute Pop Sound Effects.mp3",
+    "file": "sfx_cut/pops/pops_003.wav",
+    "start_s": 5.036,
+    "end_s": 5.235,
+    "duration_s": 0.199,
+    "mean_db": -23.9,
+    "max_db": -1.0
+  },
+  {
+    "category": "risers",
+    "source": "RIsers, Sweeps/Riser - Sound Effect (Free).mp3",
+    "file": "sfx_cut/risers/riser_001.wav",
+    "start_s": 0.857,
+    "end_s": 5.381,
+    "duration_s": 4.484,
+    "mean_db": -27.5,
+    "max_db": -6.7
+  },
+  {
+    "category": "whooshes",
+    "source": "Whoosh/Dramatic whoosh sound effects no copyright  whoosh sound effects for edits  whoosh sfx pack.mp3",
+    "file": "sfx_cut/whooshes/whooshes_003.wav",
+    "start_s": 10.201,
+    "end_s": 11.999,
+    "duration_s": 1.798,
+    "mean_db": -16.3,
+    "max_db": -0.1
+  },
+  {
+    "category": "whooshes",
+    "source": "Whoosh/Dramatic whoosh sound effects no copyright  whoosh sound effects for edits  whoosh sfx pack.mp3",
+    "file": "sfx_cut/whooshes/whooshes_005.wav",
+    "start_s": 19.458,
+    "end_s": 21.217,
+    "duration_s": 1.759,
+    "mean_db": -16.2,
+    "max_db": -0.1
+  },
+  {
+    "category": "whooshes",
+    "source": "Whoosh/Dramatic whoosh sound effects no copyright  whoosh sound effects for edits  whoosh sfx pack.mp3",
+    "file": "sfx_cut/whooshes/whooshes_007.wav",
+    "start_s": 29.799,
+    "end_s": 31.597,
+    "duration_s": 1.798,
+    "mean_db": -16.3,
+    "max_db": -0.0
+  },
+  {
+    "category": "whooshes",
+    "source": "Whoosh/Dramatic whoosh sound effects no copyright  whoosh sound effects for edits  whoosh sfx pack.mp3",
+    "file": "sfx_cut/whooshes/whooshes_008.wav",
+    "start_s": 32.178,
+    "end_s": 36.748,
+    "duration_s": 4.57,
+    "mean_db": -20.1,
+    "max_db": -0.2
+  },
+  {
+    "category": "whooshes",
+    "source": "Whoosh/Dramatic whoosh sound effects no copyright  whoosh sound effects for edits  whoosh sfx pack.mp3",
+    "file": "sfx_cut/whooshes/whooshes_010.wav",
+    "start_s": 40.042,
+    "end_s": 43.399,
+    "duration_s": 3.357,
+    "mean_db": -19.0,
+    "max_db": -1.3
+  }
+]

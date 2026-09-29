@@ -1,0 +1,25 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+; Style principal Luckiest Guy : Blanc par défaut (&H00FFFFFF), Contour Noir massif (&H00000000) de 9px, Ombre 4px
+Style: LuckiestPunch,Luckiest Guy,105,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,2,0,1,9,4,5,40,40,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+
+; 1. Mot standard blanc (Zoom pop classique centré en X=540, Y=1450)
+Dialogue: 0,0:00:00.00,0:00:00.45,LuckiestPunch,,0,0,0,,{\pos(540,1450)\an5\fscx135\fscy135\t(0,70,\fscx95\fscy95)\t(70,140,\fscx100\fscy100)\c&H00FFFFFF}REGARDE
+
+; 2. Mot standard blanc avec mini-rotation gauche (-2°)
+Dialogue: 0,0:00:00.45,0:00:00.85,LuckiestPunch,,0,0,0,,{\pos(540,1450)\an5\frz-2\fscx135\fscy135\t(0,70,\fscx95\fscy95)\t(70,140,\fscx100\fscy100)\c&H00FFFFFF}CETTE
+
+; 3. PUNCHLINE : Jaune fluo (&H0000FFFF) + rotation droite (+3°) + Pop plus violent (145%)
+Dialogue: 0,0:00:00.85,0:00:01.40,LuckiestPunch,,0,0,0,,{\pos(540,1450)\an5\frz3\fscx145\fscy145\t(0,80,\fscx95\fscy95)\t(80,150,\fscx100\fscy100)\c&H0000FFFF}DINGUERIE
+
+; 4. Mot vert néon (&H0033FF00) pour conclure
+Dialogue: 0,0:00:01.40,0:00:02.00,LuckiestPunch,,0,0,0,,{\pos(540,1450)\an5\frz-3\fscx145\fscy145\t(0,80,\fscx95\fscy95)\t(80,150,\fscx100\fscy100)\c&H0033FF00}ABSOLUE !

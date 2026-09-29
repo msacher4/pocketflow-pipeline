@@ -1,0 +1,35 @@
+Audio: JRPG_BATTLE
+
+### HOOK (0-3s)
+Plan 1 (0-3s)
+Video: Saber Alter standing alone in a burning ruined hall, black armor with red glowing lines, silver hair pale as ash, massive black sword resting on her shoulder, her head turning slowly toward the camera, flames roaring in the background, slow push-in, distant fire crackling and metal creaking, cold red ember light on her face
+VO: The boss that haunted every Fate fan just changed camps.
+
+-- Transition --
+SFX: Whoosh
+
+### BODY (3-22s)
+Plan 2 (3-6s)
+Video: Saber Alter alone on a dark digital arena floor with glowing grid lines, black armored swordswoman raising her black blade into a wide stance, purple and gold light pulses in her trail, slow dolly-in around her silhouette, echoing footsteps and low electric hum, cold neon light
+VO: Saber Alter becomes playable in Fate/EXTRA Record.
+
+Plan 3 (6-10s)
+Video: A dark armored swordswoman sprints alone through a shattered digital arena, her heavy black cape whipping behind her, debris flying with each stride, a slow tracking shot keeps her centered, metal heeled boots striking the ground, stark violet rays of light cutting through dust
+VO: The remake rebuilt combat around fighters like her.
+
+Plan 4 (10-14s)
+Video: A black-armored swordswoman slams her greatsword alone into a dark arena floor, a shockwave of red sparks bursts outward, the low camera tilts up slowly as embers rain down, heavy metal impact echoes through the space, harsh crimson light cuts against deep blue darkness
+VO: Her dark Artoria design hits heavier than shown.
+
+Plan 5 (14-18s)
+Video: A dark armored swordswoman alone walking slowly toward the camera through drifting embers, her blade dragging along the arena floor and scraping sparks, slow push-in on her cold golden eyes, scraping metal and distant crowd roar, red backlight rimming her armor
+VO: Your Heaven's Feel enemy is now on your team
+
+Plan 6 (18-22s)
+Video: A dark swordswoman alone channels writhing black-and-red flames around her raised blade, fire spiraling upward through a dark ruined chamber, a slow zoom follows her burning sword, roaring flame and deep magical hum fill the space, hot orange light swallows the shadows
+VO: Unleash her corrupt flame magic yourself.
+
+### CTA (22-26s)
+Plan 7 (22-26s)
+Video: A dark armored swordswoman standing back to back with a faint glowing golden knight silhouette in the same ruined arena, slow zoom out revealing both figures, embers floating between them, single deep bell chime, split lighting gold on one side red on the other
+VO: Golden radiance or black brutality — comment your side, tag your Saber.

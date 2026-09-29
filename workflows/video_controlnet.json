@@ -1,0 +1,150 @@
+{
+  "1": {
+    "class_type": "VHS_LoadImagesPath",
+    "inputs": {
+      "directory": "FRAME_DIR",
+      "skip_first_images": 0,
+      "select_every_nth": 1
+    }
+  },
+  "2": {
+    "class_type": "SAM2ModelLoader (segment anything2)",
+    "inputs": {
+      "model_name": "sam2_1_hiera_large.pt"
+    }
+  },
+  "3": {
+    "class_type": "GroundingDinoModelLoader (segment anything2)",
+    "inputs": {
+      "model_name": "GroundingDINO_SwinT_OGC (694MB)"
+    }
+  },
+  "4": {
+    "class_type": "GroundingDinoSAM2Segment (segment anything2)",
+    "inputs": {
+      "sam_model": ["2", 0],
+      "grounding_dino_model": ["3", 0],
+      "image": ["1", 0],
+      "prompt": "DETECT_PROMPT",
+      "threshold": 0.30,
+      "keep_model_loaded": false
+    }
+  },
+  "5": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "realvisxlV50_v30InpaintBakedvae.safetensors"
+    }
+  },
+  "6": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "sdxl_vae.safetensors"
+    }
+  },
+  "9": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "PROMPT",
+      "clip": ["5", 1]
+    }
+  },
+  "10": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "NEGATIVE_PROMPT",
+      "clip": ["5", 1]
+    }
+  },
+  "18": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["5", 0],
+      "lora_name": "Hyper-SDXL-8steps-CFG-lora.safetensors",
+      "strength_model": 1.0
+    }
+  },
+  "12": {
+    "class_type": "VAEEncodeForInpaint",
+    "inputs": {
+      "pixels": ["1", 0],
+      "vae": ["6", 0],
+      "mask": ["4", 1],
+      "grow_mask_by": 0
+    }
+  },
+  "22": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "controlnet-inpaint-sdxl.safetensors"
+    }
+  },
+  "23": {
+    "class_type": "ControlNetApplyAdvanced",
+    "inputs": {
+      "positive": ["9", 0],
+      "negative": ["10", 0],
+      "control_net": ["22", 0],
+      "image": ["1", 0],
+      "strength": 0.8,
+      "start_percent": 0.0,
+      "end_percent": 1.0
+    }
+  },
+  "14": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["18", 0],
+      "positive": ["23", 0],
+      "negative": ["23", 1],
+      "latent_image": ["12", 0],
+      "seed": "SEED",
+      "steps": 8,
+      "cfg": 6.0,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 0.5
+    }
+  },
+  "17": {
+    "class_type": "FreeMemory",
+    "inputs": {
+      "passthrough": ["14", 0]
+    }
+  },
+  "15": {
+    "class_type": "VAEDecodeTiled",
+    "inputs": {
+      "samples": ["17", 0],
+      "vae": ["6", 0],
+      "tile_size": 1024,
+      "overlap": 64,
+      "temporal_size": 64,
+      "temporal_overlap": 8
+    }
+  },
+  "16": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["15", 0],
+      "frame_rate": "FRAME_RATE",
+      "loop_count": 0,
+      "filename_prefix": "OUTPUT_NAME",
+      "format": "video/h264-mp4",
+      "pingpong": false,
+      "save_output": true
+    }
+  },
+  "20": {
+    "class_type": "MaskToImage",
+    "inputs": {
+      "mask": ["4", 1]
+    }
+  },
+  "21": {
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": ["20", 0]
+    }
+  }
+}

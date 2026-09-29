@@ -1,0 +1,25 @@
+# ==== Python ====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# ==== Runtime / artefacts de pipeline ====
+downloads/
+output/
+# gros tests vidéo
+tests/t2v_isolated/
+
+# ==== UI (bundle build, deps) ====
+ui/node_modules/
+ui/dist/
+
+# ==== Secrets ====
+.env
+.env.local
+
+# ==== Système ====
+.DS_Store
+Thumbs.db
