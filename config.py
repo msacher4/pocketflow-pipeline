@@ -90,13 +90,40 @@ SDCPP_HEIGHT = int(os.getenv("PF_SDCPP_HEIGHT", "576"))         # base 9:16 -> h
 SDCPP_STEPS = int(os.getenv("PF_SDCPP_STEPS", "8"))
 SDCPP_TILE_FRAMES = int(os.getenv("PF_SDCPP_TILE_FRAMES", "2"))  # tile temporel VAE decode (2 = validé ; 4 OOM en hires)
 SDCPP_TIMEOUT = int(os.getenv("PF_SDCPP_TIMEOUT", "1800"))     # secondes, kill si dépassé (~10 min mesuré)
-SDCPP_I2V_WIDTH = int(os.getenv("PF_SDCPP_I2V_WIDTH", "540"))      # i2v (image→vidéo) : validé 540×960 sur 16 Go VRAM
-SDCPP_I2V_HEIGHT = int(os.getenv("PF_SDCPP_I2V_HEIGHT", "960"))
-SDCPP_I2V_FRAMES = int(os.getenv("PF_SDCPP_I2V_FRAMES", "49"))         # ~3 s @ 16 fps natif (LTXAV aligne à ≡1 mod 8 : 52→49)
+SDCPP_I2V_WIDTH = int(os.getenv("PF_SDCPP_I2V_WIDTH", "320"))      # i2v : base alignée sur le T2V -> hires latent x2 = 640
+SDCPP_I2V_HEIGHT = int(os.getenv("PF_SDCPP_I2V_HEIGHT", "576"))   # idem T2V -> sortie finale 640x1152 (identique au T2V)
+SDCPP_I2V_FRAMES = int(os.getenv("PF_SDCPP_I2V_FRAMES", "97"))     # 97 @ 24 fps = 4.04 s (validé visuellement ; 49 non testé en 640x1152)
 SDCPP_I2V_STEPS = int(os.getenv("PF_SDCPP_I2V_STEPS", "8"))         # i2v LTX 2.5 : distill = 8 étapes (validé A/B)
 SDCPP_I2V_CFG = float(os.getenv("PF_SDCPP_I2V_CFG", "1.0"))          # i2v LTX 2.5 : CFG 1.0 + guidance distilled 3.5 (validé)
-SDCPP_I2V_TILE_FRAMES = int(os.getenv("PF_SDCPP_I2V_TILE_FRAMES", "2"))   # tile temporel VAE decode (validé = tile 2)
+SDCPP_I2V_GUIDANCE = float(os.getenv("PF_SDCPP_I2V_GUIDANCE", "3.5"))    # guidance distilled (1.5 testé : aucun gain visible)
+SDCPP_I2V_STRENGTH = float(os.getenv("PF_SDCPP_I2V_STRENGTH", "0.7"))    # 0.7 validé ; 0.4 également validé (plus faithful à la source)
+SDCPP_I2V_SAMPLER = os.getenv("PF_SDCPP_I2V_SAMPLER", "euler_a")    # euler_a = ancestral, validé sur les runs 97f 640x1152
+SDCPP_I2V_TILE_FRAMES = int(os.getenv("PF_SDCPP_I2V_TILE_FRAMES", "2"))   # tuile temporelle du refine. 4 ne touche QUE le decode VAE
+                                                        # (923->906 s) et rate son budget : le retry auto rebascule en 3.
+                                                        # 2 reste sous le seuil, donc pas de tentative ratée.
+# overlap = 1, comme le défaut de ggml (common.cpp:1059). NE PAS revenir à 0.
+# Avec overlap=0, ltx_vae.hpp:1137 avance les tuiles de (window - overlap) = 2 frames
+# sans aucun recouvrement : chaque frame est décodée isolément puis collée à sa voisine.
+# Résultat : couture temporelle toutes les 2 frames, soit un clignotement visible du
+# sujet par fractions de seconde, répété sur toute la durée (symptôme observé et validé
+# visuellement). À overlap=1 chaque frame est décodée deux fois comme contexte de la
+# suivante ; le rendu est propre. Vérifié en 512x384 ET 640x1152, sans OOM (refine 654 s).
 SDCPP_I2V_TILE_OVERLAP = int(os.getenv("PF_SDCPP_I2V_TILE_OVERLAP", "1"))
+# Tuile spatiale du refine hires. 128 (comme le T2V) OOM en I2V sur
+# "need 6194 Mo / available 1530 Mo". 64 fait rentrer le pic.
+SDCPP_I2V_HIRES_TILE = int(os.getenv("PF_SDCPP_I2V_HIRES_TILE", "64"))
+# Épingler le DiT sur disque (ResidencyMode::Disk) au lieu de la VRAM : les poids
+# deviennent évictables et sont paginés à la demande (ggml_extend_backend.cpp:50).
+# Indispensable : SANS ÇA le refine hires 640x1152 échoue
+# ("need 6194 Mo / available 1530 Mo") alors que la passe base passe (107 s).
+# Le patch 85626f4 libère déjà le DiT avant le DECODE ; il ne le faisait pas
+# avant le REFINE, qui est le vrai goulot. Text encoder libéré de la RAM avant (7921 Mo).
+SDCPP_I2V_DIFFUSION_PARAMS = os.getenv("PF_SDCPP_I2V_DIFFUSION_PARAMS", "disk")   # "ROCm0" pour épingler en VRAM (échoue en hires)
+SDCPP_I2V_DISABLE_PREFETCH = os.getenv("PF_SDCPP_I2V_DISABLE_PREFETCH", "1") == "1"  # 1 = passe --disable-prefetch, donc prefetch asynchrone COUPÉ
+                                                        # (common.cpp:540, défaut upstream = prefetch actif). C'est ce qui a servi
+                                                        # au run validé 640x1152. Mettre 0 pour laisser le prefetch par défaut.
+SDCPP_I2V_HIRES_STEPS = int(os.getenv("PF_SDCPP_I2V_HIRES_STEPS", "3"))    # refine hires. 2 OOM (cudaMalloc 146 Mo) : le plan de découpe change
+                                                        # avec le nombre d'étapes, pas seulement le nombre de passes.
 SDCPP_SKIP_UPSCALE = os.getenv("PF_SDCPP_SKIP_UPSCALE", "0") == "1"  # 720p passthrough : skip RIFE+lanczos (débogage rapide)
 SDCPP_UPSCALE_WIDTH = int(os.getenv("PF_SDCPP_UPSCALE_WIDTH", "1080"))  # résolution cible upscale
 SDCPP_UPSCALE_HEIGHT = int(os.getenv("PF_SDCPP_UPSCALE_HEIGHT", "1920"))
