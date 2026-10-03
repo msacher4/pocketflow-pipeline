@@ -107,6 +107,34 @@ Toutes sont chargées depuis `.env` via `python-dotenv` (`load_dotenv()` en têt
 
 ⚠️ **Ne jamais commiter le `.env` rempli.** Les autres réglages non-sensibles (`PF_SDCPP_*`, `PF_ACESTEP_*`, chemins, modèles LLM…) ont des valeurs par défaut en dur dans `config.py` et restent optionnels.
 
+## Config I2V validée (LTX-2.5, 16 Go)
+
+Ces valeurs ont été **validées visuellement** sur le build local de `stable-diffusion.cpp` (`sdcpp-video-memory-control`). Elles sont mesurées, pas supposées : chaque ligne ci-dessous a été obtenue en observant le rendu. Ne pas les changer sans revalider.
+
+Sortie : **640×1152, 97 frames, 24 fps** (4,04 s), sans scintillement. Passe base 320×576 puis hires latent ×2.
+
+| Réglage | Valeur | Pourquoi — et ce qui casse sinon |
+|---|---|---|
+| `PF_SDCPP_I2V_TILE_OVERLAP` | `1` | **Ne pas revenir à 0.** À 0, `ltx_vae.hpp` avance les tuiles sans recouvrement : chaque frame est décodée isolément puis recollée → couture toutes les 2 frames, visible comme un clignotement sur toute la durée. À 1 le rendu est propre. |
+| `PF_SDCPP_I2V_DIFFUSION_PARAMS` | `disk` | Épingle les poids du DiT hors VRAM pour le refine hires. **Sans ça : OOM « need 6194 Mo / available 1530 Mo »**, alors que la passe base passe. |
+| `PF_SDCPP_I2V_HIRES_TILE` | `64` | `128` OOM en I2V (« need 6194 Mo »). 64 fait rentrer le pic. |
+| `PF_SDCPP_I2V_HIRES_STEPS` | `3` | `2` OOM (`cudaMalloc` 146 Mo) : le plan de découpe change avec le nombre d'étapes, pas seulement le nombre de passes. |
+| `PF_SDCPP_I2V_STRENGTH` | `0.7` | `0.4` fonctionne aussi. ⚠️ Une ancienne docstring affirmait « < 1.0 produit un gris uniforme » : **c'est faux**, testé et infirmé. |
+| `PF_SDCPP_I2V_SAMPLER` | `euler_a` | Le chemin I2V sortait sur `euler`, valeur jamais testée. |
+| `PF_SDCPP_I2V_FRAMES` | `97` | 49 n'a **jamais** été testé en 640×1152. |
+| `PF_SDCPP_I2V_TILE_FRAMES` | `2` | `4` ne gagne que 2 % (923→906 s) et rate son budget : le retry automatique rebascule en 3 tout seul. |
+| `PF_SDCPP_I2V_GUIDANCE` | `3.5` | Guidance distilled. `1.5` n'apportait aucun gain visible. |
+| `PF_SDCPP_I2V_CFG` | `1.0` | LTX-2.5 est un modèle distillé, la guidance remplace le CFG. |
+| `PF_SDCPP_I2V_DISABLE_PREFETCH` | `1` | Passe `--disable-prefetch`, donc prefetch asynchrone **coupé** (défaut sd-cli = actif). `1` → booléen Python `True` ; mettre `0` pour laisser le prefetch par défaut. |
+
+Le `--fps` est passé explicitement sur les deux chemins (T2V et I2V) : `sd-cli` a 24 par défaut, donc l'I2V sortait à 24 fps par hasard, ce qui masquait la constante `FPS = 16.0` qui faussait `duration_s` (6,06 s au lieu de 4,04 s — valeur reprise par `montage_planner` pour la timeline).
+
+**Limites connues, non testées :**
+
+- La chaîne **Klein 320×576 → I2V 320×576** n'a jamais été exercée de bout en bout. L'image source passe de 540×960 à 320×576 (2,25× moins de pixels) via ComfyUI. Si la qualité des images de source se dégrade, c'est la première chose à vérifier.
+- **Un seul slot** a été validé. La boucle multi-slots et `post_async` (merge dans `generated_videos`, `return "regen"` sur échec) n'ont pas été exercés.
+- Le T2V **n'a pas été revalidé** : il conserve `--hires-steps 4` / tuile 128, sa valeur d'origine.
+
 ## Git / workflow de patchs
 
 ```bash
@@ -118,3 +146,28 @@ git push
 ```
 
 Règles : un commit par sujet, messages clairs, secrets uniquement dans `.env` local (jamais en dur dans le code).
+
+### Versions marquées
+
+Chaque version validée est marquée par un tag **annoté** (`git tag -a`), ce qui conserve le message, la date et l'auteur — un tag tout court ne garderait qu'un pointeur.
+
+| Tag | État de l'I2V |
+|---|---|
+| `v1-base` | 540×960, 49 frames, `--strength 1.0`, pas de passe hires |
+| `v2-540x960` | 540×960, idem — **antérieur** à `v2-i2v-640x1152` malgré le préfixe commun, c'est un point de retour |
+| `v2-i2v-640x1152` | **640×1152, 97 frames, 24 fps** — version courante, validée visuellement |
+
+### Revenir à une version antérieure
+
+```bash
+# 1. consulter une ancienne version sans rien changer
+git show v1-base:config.py
+
+# 2. revenir en arrière en conservant l'historique (sur un dépôt partagé)
+git revert <commit> ...
+
+# 3. inspecter une ancienne version dans un dossier détaché
+git checkout v1-base
+```
+
+⚠️ **Privilégier `git revert` plutôt qu'un `reset`.** Un `reset --hard` suivi d'un push réécrit l'historique partagé et casse le clone de quiconque a déjà récupéré la branche.
