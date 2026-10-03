@@ -183,6 +183,7 @@ def _build_cmd_i2v(
     steps: int,
     cfg: float,
     negative: str | None = None,
+    fps: int = SDCPP_FPS,
 ) -> list[str]:
     """Commande sd-cli I2V LTX-2.5 — même chaîne de sortie que le T2V.
 
@@ -214,6 +215,7 @@ def _build_cmd_i2v(
         "--sampling-method", SDCPP_I2V_SAMPLER,
         "-n", negative if negative else SDCPP_DEFAULT_NEGATIVE,
         "--video-frames", str(frames),
+        "--fps", str(fps),
         "--width", str(width),
         "--height", str(height),
         "--temporal-tiling",
@@ -247,6 +249,7 @@ async def sdcpp_generate_video_i2v(
     cfg: float = SDCPP_I2V_CFG,
     timeout_s: int = SDCPP_TIMEOUT,
     negative: str | None = None,
+    fps: int = SDCPP_FPS,
 ) -> str | None:
     """Génère un clip vidéo I2V via stable-diffusion.cpp (LTX-2.5 22B distill).
 
@@ -284,8 +287,8 @@ async def sdcpp_generate_video_i2v(
 
     # sd-cli charge le VAE + image dans l'input ; s'assurer que l'image est accessible
     cmd = _build_cmd_i2v(prompt, image_path, output, seed, frames, width, height,
-                         steps, cfg, negative=negative)
-    log.info(f"sdcpp_i2v: {name} seed={seed} frames={frames} {width}x{height} steps={steps} img={os.path.basename(image_path)}")
+                         steps, cfg, negative=negative, fps=fps)
+    log.info(f"sdcpp_i2v: {name} seed={seed} frames={frames} {width}x{height} steps={steps} fps={fps} img={os.path.basename(image_path)}")
 
     proc = None
     try:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pocketflow import AsyncNode
 
-from config import SDCPP_I2V_FRAMES, SDCPP_TIMEOUT
+from config import SDCPP_FPS, SDCPP_I2V_FRAMES, SDCPP_TIMEOUT
 from helpers.state import _set_state, _shared_snapshot, _set_traces
 from helpers.sdcpp_api import sdcpp_generate_video_i2v
 from nodes.assetfinder.sdcpp_i2v_generator import _find_image_for_slot
@@ -14,7 +14,11 @@ from nodes.assetfinder.sdcpp_i2v_generator import _find_image_for_slot
 log = logging.getLogger("pocketflow-pipeline")
 
 DOWNLOADS_DIR = Path(__file__).parent.parent.parent / "downloads"
-FPS = 16.0
+# Doit venir de SDCPP_FPS (24), comme le T2V. La valeur 16.0 codee en dur
+# faisait annoncer 97/16 = 6.06 s pour un clip qui dure 97/24 = 4.04 s. Cette
+# duree est reprise par montage_planner.py (end_s=duration_s), donc chaque clip
+# I2V se faisait etirer de 2 s sur la timeline, avec 2 s de trou noir.
+FPS = float(SDCPP_FPS)
 
 
 class AltI2VNode(AsyncNode):
