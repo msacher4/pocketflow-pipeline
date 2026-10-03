@@ -82,7 +82,7 @@ def _build_cmd(prompt: str, output: Path, seed: int, frames: int, width: int, he
         "--hires",
         "--hires-upscalers-dir", SDCPP_HIRES_DIR,
         "--hires-upscaler", SDCPP_HIRES_MODEL,
-        "--hires-steps", "3",
+        "--hires-steps", "4",
         "--hires-upscale-tile-size", "128",
         "--output", str(output),
         "-p", prompt,

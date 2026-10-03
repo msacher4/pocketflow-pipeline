@@ -19,7 +19,17 @@ class ComfyUIImageGenerator(AsyncNode):
     """Génère des images via Klein (FLUX) pour chaque slot visuel du blueprint.
 
     Résolution = cible i2v (SDCPP_I2V_WIDTH×SDCPP_I2V_HEIGHT) : l'image est
-    générée directement en 540×960 portrait, sans crop central côté sd-cli.
+    générée directement en 320×576 portrait, sans crop central côté sd-cli.
+
+    320×576 correspond exactement à la passe BASE de l'I2V, qui fait ensuite un
+    hires latent x2 vers 640×1152. Ce qui veut dire que l'image de conditionnement
+    est à la résolution de la base, et non 2× plus fine.
+
+    LIMITE CONNUE, non testée : la valeur précédente était 540×960. Passer à
+    320×576 divise le nombre de pixels de l'image Klein par 2.25, et la chaîne
+    « Klein 320×576 -> I2V 320×576 » n'a jamais été exercée de bout en bout
+    (le run I2V de référence partait d'une image 499×333). Si la qualité des
+    images de source se dégrade, c'est la première chose à vérifier.
     """
 
     def __init__(self):
