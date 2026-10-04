@@ -216,5 +216,6 @@ class RealCharacterImageNode(AsyncNode):
         # abandon du run, rebouclage ActuFinder pour un autre article.
         if missing_ids:
             log.warning(f"RealCharacterImage: slots I2V sans image {missing_ids} -> retry_no_image")
+            shared["_missing_image_slots"] = sorted(missing_ids)
             return "retry_no_image"
         return "default"

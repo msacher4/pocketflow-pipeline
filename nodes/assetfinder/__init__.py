@@ -14,6 +14,7 @@ from .sdcpp_i2v_generator import SDCppI2VNode
 from .comfyui_image_generator import ComfyUIImageGenerator
 from .comfyui_klein_ref_generator import ComfyUIKleinRefImageGenerator
 from .real_character_image import RealCharacterImageNode
+from .retry_no_image import RetryNoImage
 from .alt_i2v import AltI2VNode
 from .rewrite_i2v_prompt import RewriteI2VPromptNode
 from .validate_i2v import ValidateI2V
@@ -106,6 +107,7 @@ def build_assetfinder_alt_flow() -> AsyncFlow:
     init = InitCleanup(step="init_cleanup_alt")
     ap = AssetPlannerAltNode()
     real = RealCharacterImageNode()
+    retry_no_image = RetryNoImage()
     klein_ref = ComfyUIKleinRefImageGenerator()
     rewrite_i2v_prompt = RewriteI2VPromptNode()
     validate_i2v = ValidateI2V()
@@ -141,7 +143,16 @@ def build_assetfinder_alt_flow() -> AsyncFlow:
                  "_slots_to_regenerate", "_video_action", "_i2v_phase", "_i2v_image_prompt"],
     )
 
-    init >> ap >> real >> klein_ref >> rewrite_i2v_prompt >> validate_i2v >> cleanup >> free_svg >> svg
+    # Le cleanup llama passe AVANT klein_ref : ComfyUI charge ~15.9 Go et
+    # n'a pas la place de cohabiter avec le LLM. `real` s'execute avant (il
+    # utilise le LLM pour choisir parmi les posts Danbooru) et
+    # rewrite_i2v_prompt apres (il reveille le modele vision a la demande,
+    # llama-server le charge tout seul).
+    init >> ap >> real >> cleanup >> klein_ref >> rewrite_i2v_prompt >> validate_i2v >> free_svg >> svg
+    # Slot I2V sans image reelle -> on re-selectionne un autre article
+    # (AltRetryGate -> actufinder, borne a ALT_RETRY_MAX). Sans ce edge le
+    # sous-flux s'arretait sur "Flow ends: 'retry_no_image' not found".
+    real - "retry_no_image" >> retry_no_image
     validate_i2v - "regen_image" >> real
     validate_i2v - "regen_prompt" >> rewrite_i2v_prompt
     svg - "default" >> alt_i2v

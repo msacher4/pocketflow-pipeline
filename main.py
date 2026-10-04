@@ -53,6 +53,32 @@ class AltRetryGate(AsyncNode):
         return "retry" if n <= ALT_RETRY_MAX else "give_up"
 
     async def post_async(self, shared, prep, exec):
+        if exec == "give_up":
+            # L'edge "give_up" n'etait cable vers rien : le pipeline s'arretait
+            # en silence apres ALT_RETRY_MAX articles sans image reelle. On rend
+            # l'echec explicite (state + Telegram) avant de laisser le flow finir.
+            msg = (
+                f"Run alt abandonne apres {ALT_RETRY_MAX} articles\n\n"
+                f"Topic: {shared.get('topic', '?')}\n"
+                f"Aucun personnage n'a pu etre illustre : aucun slot I2V "
+                f"n'a d'image reelle (Danbooru) apres {ALT_RETRY_MAX} tentatives."
+            )
+            shared["_error"] = (
+                f"AltRetryGate: abandon apres {ALT_RETRY_MAX} articles sans image reelle"
+            )
+            shared["_current_step"] = "alt_retry_give_up"
+            shared.setdefault("steps", []).append({
+                "step": "alt_retry", "status": "error",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "output": f"give_up apres {shared.get('_alt_retry_count')} tentatives",
+            })
+            await _set_state(**_shared_snapshot(shared, running=False))
+            try:
+                await send_telegram(msg)
+            except Exception as e:  # la notif ne doit jamais masquer l'echec
+                log.warning(f"AltRetryGate: notif Telegram give_up echouee: {type(e).__name__}: {e}")
+            return "give_up"
+
         await _set_state(**_shared_snapshot(shared))
         return exec
 

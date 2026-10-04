@@ -67,6 +67,7 @@ NODE_TYPES = {
     "validate_i2v":             {"icon": "👤", "label": "Validation I2V",       "model": "Telegram"},
     "alt_i2_v":                 {"icon": "🎥", "label": "Alt I2V",              "model": "LTX-Video 2.3"},
     "cleanup_llama_proxy":      {"icon": "🧹", "label": "CleanupLlama",         "model": ""},
+    "retry_no_image":           {"icon": "🔁", "label": "Retry No Image",       "model": ""},
     "combined_cleanup":         {"icon": "🧹", "label": "Cleanup All",          "model": ""},
     "i2v_cleanup":             {"icon": "🧹", "label": "I2V Cleanup",          "model": ""},
     "i2v_video_cleanup":       {"icon": "🧹", "label": "I2V Vid Cleanup",      "model": ""},
