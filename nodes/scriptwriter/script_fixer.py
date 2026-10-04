@@ -31,7 +31,12 @@ from pocketflow import AsyncNode
 from config import LLM_SCRIPTWRITER_ALT_MODEL
 from helpers.state import _set_state, _shared_snapshot, _set_traces
 from helpers.call_llm import call_llm, load_soul, _extract_json, _trace_llm, LLMJSONQuoteError
-from .script_timing import parse_plans, plan_budget_words, plan_vo_words
+from .script_timing import (
+    parse_plans,
+    plan_budget_words,
+    plan_vo_words,
+    static_video_reason,
+)
 
 log = logging.getLogger("pocketflow-pipeline")
 
@@ -135,9 +140,14 @@ class ScriptFixerNode(AsyncNode):
         return shared
 
     def _self_validate(self, script: str, shared) -> list[str]:
-        """Validation déterministe de la SORTIE (mêmes règles que le validateur) :
-        retourne la liste des erreurs résiduelles, VIDE si le script est propre.
-        Reproduit EXACTEMENT les règles de pydantic_validation.py l.152-210."""
+        """Validation déterministe de la SORTIE : retourne la liste des erreurs
+        résiduelles, VIDE si le script est propre.
+
+        La règle « plan FIGÉ » est déléguée à `script_timing.static_video_reason`
+        — la MÊME fonction que le validateur pydantic. Les deux copies
+        locales avaient divergé (regex `frozen` en dur ici, liste différente
+        là), ce qui rendait l'auto-validation incapable de voir un défaut que
+        le validateur, lui, rejetait."""
         errors: list[str] = []
         for p in parse_plans(script):
             budget = plan_budget_words(p)
@@ -165,8 +175,9 @@ class ScriptFixerNode(AsyncNode):
             if n_ends < 3 and n_words < 25:
                 errors.append(f"{prefix}: Video trop courte ({n_words} mots, {n_ends} phrase(s))")
                 continue
-            if re.search(r"\b(standing still|static shot|static pose|frozen|motionless)\b", low):
-                errors.append(f"{prefix}: plan FIGÉ interdit: {raw.strip()[:80]}")
+            reason = static_video_reason(raw)
+            if reason:
+                errors.append(f"{prefix}: plan FIGÉ interdit: {reason} — {raw.strip()[:80]}")
         return errors
 
     async def exec_async(self, shared):

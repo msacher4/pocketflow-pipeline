@@ -9,6 +9,7 @@ from pydantic import BaseModel, field_validator
 from pocketflow import AsyncNode
 
 from helpers.state import _set_state, _shared_snapshot
+from nodes.scriptwriter.script_timing import static_video_reason
 
 log = logging.getLogger("pocketflow-pipeline")
 
@@ -147,7 +148,7 @@ class GeneratedScriptAlt(GeneratedScript):
         porter action + décor + caméra (>= 3 phrases ou >= 25 mots).
 
         Erreurs préfixées "ASSET(plan N)" pour que le routing les envoie vers le
-        VideoAssetFixer (réécriture ciblée de la SEULE ligne fautive) au lieu de
+        ScriptFixer (réécriture ciblée de la SEULE ligne fautive) au lieu de
         régénérer tout le script via AltSG."""
         if not v or not v.strip():
             return v
@@ -188,26 +189,32 @@ class GeneratedScriptAlt(GeneratedScript):
     @field_validator("script")
     @classmethod
     def script_video_no_static(cls, v):
-        """Une ligne Video: figée (standing still / static / portrait) est interdite
-        par la règle 12 (dynamisme obligatoire) — LTX ne rend rien d'intéressant."""
+        """Une ligne Video: figée est interdite par la règle 12 (dynamisme
+        obligatoire) — LTX ne rend rien d'intéressant.
+
+        Le contrôle est délégué à `script_timing.static_video_reason`, source
+        UNIQUE partagée avec le ScriptFixer. L'ancienne regex locale rejetait
+        `frozen` sur TOUTE la ligne, donc aussi un décor (« a vast frozen
+        throne hall ») dont le personnage était en mouvement : 6 régénérations
+        AltSG,~39 min, erreur identique à chaque cycle (run 20261004_131919)."""
         if not v or not v.strip():
             return v
-        import re as _re
         current_plan = None
         for line in v.splitlines():
-            m = _re.match(r"^\s*[-*]?\s*Plan\s*(\d+)\s*\(", line)
+            m = re.match(r"^\s*[-*]?\s*Plan\s*(\d+)\s*\(", line)
             if m:
                 current_plan = int(m.group(1))
                 continue
-            if not _re.match(r"^\s*[-*]?\s*Video\s*:", line, _re.IGNORECASE):
+            if not re.match(r"^\s*[-*]?\s*Video\s*:", line, re.IGNORECASE):
                 continue
-            low = line.lower()
-            if _re.search(r"\b(standing still|static shot|static pose|frozen|motionless)\b", low):
+            reason = static_video_reason(line)
+            if reason:
+                # PRÉFIXE `ASSET(plan N):` OBLIGATOIRE — `is_asset_error()` teste
+                # "asset(plan" pour router vers le ScriptFixer ; sans lui l'erreur
+                # retombe dans le `else` → régénération AltSG complète.
                 raise ValueError(
-                    f"ASSET(plan {current_plan}): plan FIGÉ interdit dans Video: — un asset "
-                    "vidéo doit décrire du mouvement (personnage en action ou pose dynamique, "
-                    "mouvement caméra, éléments en mouvement). Réécris la ligne avec de "
-                    "l'énergie explicite."
+                    f"ASSET(plan {current_plan}): plan FIGÉ interdit dans Video: "
+                    f"{reason}. Réécris la ligne avec de l'énergie explicite."
                 )
         return v.strip()
 
@@ -446,7 +453,7 @@ def is_vo_length_error(err: str) -> bool:
 def is_asset_error(err: str) -> bool:
     """True si l'erreur cible une ligne `Video:` précise (préfixée "ASSET(plan N)").
 
-    Ces erreurs sont réparables par le VideoAssetFixer — réécriture de la SEULE
+    Ces erreurs sont réparables par le ScriptFixer — réécriture de la SEULE
     ligne Video fautive, structure du script intacte — au lieu d'une régénération
     complète via AltSG. C'est la réparation ciblée demandée (validation JEV +
     brackets + statique)."""
@@ -601,7 +608,7 @@ class AltPydanticScriptValidationNode(PydanticScriptValidationNode):
 
         # Routage sélectif :
         #  - VO trop longue → VoShortener (réécriture ciblée des VO, structure intacte) ;
-        #  - Video: fautive (bracket/statique/headcount JEV) → VideoAssetFixer
+        #  - Video: fautive (bracket/statique/headcount JEV) → ScriptFixer
         #    (réécriture de la SEULE ligne Video fautive — la réparation ciblée par
         #    asset demandée : quand un asset est rejeté, seul cet asset est réécrit) ;
         #  - horaires de plan incohérents → filet déterministe repair_pacing_script

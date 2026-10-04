@@ -203,6 +203,134 @@ def pacing_errors(script: str) -> list[str]:
     return errs
 
 
+# ---------------------------------------------------------------------------
+# Règle 12 — DYNAMISME OBLIGATOIRE (source UNIQUE de vérité)
+#
+# Cette règle a vécu en regex dupliquée dans pydantic_validation.py ET
+# script_fixer.py. Les deux copies ont divergé, et la version d'origine
+# rejetait `frozen` sur TOUTE la ligne : un décor (« a vast frozen throne
+# hall ») tuait un plan dont le personnage était en mouvement. Résultat : 6
+# régénérations AltSG et ~39 min pour une erreur identique à chaque cycle
+# (run 20261004_131919).
+#
+# Le décor peut être figé ; c'est le PERSONNAGE qui doit bouger. D'où les
+# deux régimes :
+#   1. phrases de pose statique → rejet inconditionnel (désambiguïsées) ;
+#   2. personnage détecté mais aucun verbe dynamique → rejet.
+# Une ligne purement décorative (règle 6 du soul : « personnages, décors,
+# actions, caméra, éclairage, ambiance ») n'échoue PAS sur le point 2.
+# ---------------------------------------------------------------------------
+
+_STATIC_POSE_PHRASES = (
+    r"standing still",
+    r"static shot",
+    r"static pose",
+    r"stands alone",
+    r"stands at the center",
+    r"stands motionless",
+    r"stands in place",
+    r"remains still",
+    r"remains motionless",
+    r"holds still",
+    r"waits motionless",
+    r"freezes in place",
+    r"frozen in place",
+    r"poses still",
+    # Poses statiques explicites : `fold\w*` est aussi dynamique ("folds shirts"
+    # = lessive en action) mais "hands folded" est une pose immobile.
+    r"hands? folded",
+    r"arms? folded",
+    r"arms? crossed",
+    r"hands? clasped",
+)
+_STATIC_POSE_RE = re.compile(r"\b(?:" + "|".join(_STATIC_POSE_PHRASES) + r")\b", re.IGNORECASE)
+
+# `frozen` et `motionless` seuls ne sont PLUS un rejet : ils qualifient le
+# décor aussi bien que le personnage (« frozen battlefield », « cape
+# motionless while she spins »). Ils ne sont invalides que via le point 2,
+# c'est-à-dire quand aucun verbe dynamique n'est présent.
+_PERSON_RE = re.compile(
+    r"\b(?:"
+    r"girl|boy|woman|man|lady|ladies|gentleman|damsel|maiden|queen|princess|king|"
+    r"tsaritsa|tsarina|empress|emperor|swordswoman|swordsman|warrior|knight|"
+    r"heroine|hero|mage|witch|wizard|ninja|samurai|assassin|spy|thief|rogue|"
+    r"idol|dancer|model|streamer|gamer|chef|waitress|clerk|athlete|diver|"
+    r"idol|fan|player|vlogger|influencer|doll|elf|fairy|catgirl|catboy|"
+    r"female|male|ladyfriend|girlfriend|boyfriend|couple|"
+    r"traveler|traveller|wanderer|archetype|"
+    r"bystander|onlooker|passerby|peer|"
+    r"she|her|hers|he|him|his|himself|herself|themselves"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Verbes d'action / de mouvement. Formes en -ing et en 3e personne privilégiées :
+# "whipping", "billowing", "strides", "spins" sont dynamiques sans ambiguïté
+# nominale, alors que "spin"/"draw" seuls seraient ambigus.
+_DYNAMIC_VERB_RE = re.compile(
+    r"\b(?:" + "|".join((
+        r"accelerat\w*", r"advanc\w+", r"arch\w+", r"ascending", r"balancing",
+        r"billow\w*", r"bowing", r"brandish\w*",
+        r"burst\w*", r"cascad\w+", r"charg\w+", r"clutch\w*", r"coiling",
+        r"cradl\w+", r"crouch\w*", r"curl\w+", r"cutt\w+", r"danc\w+",
+        r"dart\w*", r"dash\w*", r"dodging", r"drift\w*", r"duel\w*",
+        r"emerg\w+", r"explod\w+", r"extend\w*", r"fall\w*", r"flick\w*",
+        r"flow\w*", r"flutter\w*", r"fold\w*", r"glid\w+",
+        r"grasp\w*", r"gripp\w*", r"hoist\w*", r"hurrying",
+        r"hurdling", r"juggling", r"jump\w*", r"kick\w*", r"kneel\w*",
+        r"lanc\w+", r"leap\w*", r"lift\w*", r"march\w*", r"nod\w*",
+        r"open\w*", r"plung\w+", r"plummet\w*", r"press\w+", r"prowling",
+        r"pull\w*", r"pump\w*", r"rais\w+", r"reach\w+", r"recoil\w*",
+        r"rippl\w+", r"roll\w*", r"rush\w*", r"sail\w*", r"scal\w+",
+        r"scatter\w*", r"shatter\w*", r"sheath\w*",
+        r"shift\w*", r"slash\w*", r"slid\w+", r"smil\w+",
+        r"snarl\w*", r"soar\w*", r"spin\w*", r"sprawl\w*", r"stalk\w*",
+        r"stamp\w*", r"stir\w*", r"stride\w*", r"strok\w+", r"strut\w*",
+        r"surge\w*", r"sway\w*", r"swing\w*", r"swirl\w*", r"swerve\w*",
+        r"tail\w*", r"tear\w*", r"thrust\w*", r"tilt\w*", r"topple\w*",
+        r"turn\w*", r"twirl\w*", r"unfurl\w*", r"vault\w*", r"wade\w*",
+        r"waver\w*", r"whip\w*", r"whirling", r"wing\w*", r"wrapping",
+        r"yaw\w*",
+    )) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def character_present(video_text: str) -> bool:
+    """True si la ligne Video: décrit un personnage (nom commun ou pronom genré).
+
+    Une ligne purement décorative/ambiantielle renvoie False : la règle 12
+    n'exige alors AUCUN verbe (sinon on rejetait les plans d'ambiance que la
+    règle 6 du soul autorise explicitement)."""
+    return bool(_PERSON_RE.search(video_text or ""))
+
+
+def has_dynamic_verb(video_text: str) -> bool:
+    """True si la ligne contient au moins un verbe d'action / de mouvement."""
+    return bool(_DYNAMIC_VERB_RE.search(video_text or ""))
+
+
+def static_video_reason(video_text: str) -> str | None:
+    """Raison de rejet d'une ligne Video: statique, ou None si elle est OK.
+
+    Source UNIQUE utilisée par le validateur pydantic ET par le ScriptFixer
+    (auto-validation de sortie) : impossible de diverger."""
+    low = (video_text or "").lower()
+    m = _STATIC_POSE_RE.search(low)
+    if m:
+        return (
+            f"pose statique interdite ({m.group(0)!r}) — le personnage doit être "
+            "en action ou en pose dynamique, pas figé"
+        )
+    if character_present(low) and not has_dynamic_verb(low):
+        return (
+            "aucun verbe d'action ni de mouvement sur le personnage — un asset "
+            "vidéo doit décrire du mouvement (personnage en action ou pose "
+            "dynamique, mouvement caméra, éléments en mouvement)"
+        )
+    return None
+
+
 def plan_vo_refs(script: str) -> dict[int, list[str]]:
     """plan num -> [refs des VO du plan] (v1..vN, ordre global des lignes VO:)."""
     out: dict[int, list[str]] = {}

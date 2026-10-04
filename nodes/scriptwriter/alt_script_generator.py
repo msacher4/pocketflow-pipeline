@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from pocketflow import AsyncNode
@@ -9,6 +10,30 @@ from helpers.state import _set_state, _shared_snapshot, _set_traces
 from helpers.call_llm import call_llm, load_soul, load_knowledge, extract_knowledge_section, _extract_json, _trace_llm
 
 log = logging.getLogger("pocketflow-pipeline")
+
+_AUDIO_LINE_RE = re.compile(r"^(\s*[-*]?\s*Audio\s*:\s*)(.+?)\s*$", re.IGNORECASE)
+
+
+def _first_audio_value(script: str) -> str | None:
+    """Valeur de la 1re ligne `Audio:` d'un script, ou None."""
+    for line in (script or "").splitlines():
+        m = _AUDIO_LINE_RE.match(line)
+        if m and m.group(2).strip():
+            return m.group(2).strip()
+    return None
+
+
+def _force_audio_value(script: str, value: str) -> tuple[str, bool]:
+    """Réécrit la 1re ligne `Audio:` avec `value`. Retourne (script, modifié?)."""
+    lines = (script or "").splitlines()
+    for i, line in enumerate(lines):
+        m = _AUDIO_LINE_RE.match(line)
+        if m:
+            if m.group(2).strip() == value:
+                return script, False
+            lines[i] = f"{m.group(1)}{value}"
+            return "\n".join(lines), True
+    return script, False
 
 
 class AltScriptGeneratorNode(AsyncNode):
@@ -151,6 +176,26 @@ class AltScriptGeneratorNode(AsyncNode):
             await _set_state(**_shared_snapshot(shared, running=False))
             await _set_traces(shared.get("_traces", {}))
             raise RuntimeError("AltScriptGenerator aborted: empty script")
+
+        # Verrou du mood musical : le `Audio:` est résolu par l'AssetPlanner
+        # DEPUIS le script (`_audio_mood_for`), donc chaque régénération pouvait
+        # le faire dériver. Observé sur le run 20261004_131919 : UPBEAT_GAMING
+        # → JRPG_BATTLE → ANIME_OPENING au fil des escalades du ScriptFixer.
+        # On fige la valeur du PREMIER script : la musique d'un run ne doit pas
+        # être un effet de bord des loops de réparation.
+        found_audio = _first_audio_value(raw_script)
+        locked_audio = shared.get("_audio_mood_locked")
+        if found_audio:
+            if locked_audio and found_audio != locked_audio:
+                raw_script, changed = _force_audio_value(raw_script, locked_audio)
+                if changed:
+                    log.info(
+                        f"AltSG -> Audio verrouillé sur '{locked_audio}' "
+                        f"(LLM avait proposé '{found_audio}')"
+                    )
+            elif not locked_audio:
+                shared["_audio_mood_locked"] = found_audio
+                log.info(f"AltSG -> Audio verrouillé sur '{found_audio}' (1er script)")
 
         shared["script"] = raw_script
         # Script neuf = budget de réparations neuf : le compteur pydantic compte
