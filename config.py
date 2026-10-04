@@ -88,6 +88,10 @@ SDCPP_FPS = int(os.getenv("PF_SDCPP_FPS", "24"))
 SDCPP_WIDTH = int(os.getenv("PF_SDCPP_WIDTH", "320"))           # base 9:16 -> hires x2 = 640
 SDCPP_HEIGHT = int(os.getenv("PF_SDCPP_HEIGHT", "576"))         # base 9:16 -> hires x2 = 1152
 SDCPP_STEPS = int(os.getenv("PF_SDCPP_STEPS", "8"))
+SDCPP_T2V_CFG = float(os.getenv("PF_SDCPP_T2V_CFG", "1.0"))    # t2v LTX 2.5 : CFG 1.0 distilled (3.0 causait image fixe + zoom)
+SDCPP_T2V_GUIDANCE = float(os.getenv("PF_SDCPP_T2V_GUIDANCE", "3.5"))  # t2v LTX 2.5 : guidance distilled, explicite (avant : defaut sd-cli)
+SDCPP_T2V_SAMPLER = os.getenv("PF_SDCPP_T2V_SAMPLER", "euler_a")   # euler_a = ancestral ; euler simple rendait un zoom fige
+SDCPP_T2V_HIRES_STEPS = int(os.getenv("PF_SDCPP_T2V_HIRES_STEPS", "3"))  # refine hires ; 4 surchargait la scene
 SDCPP_TILE_FRAMES = int(os.getenv("PF_SDCPP_TILE_FRAMES", "2"))  # tile temporel VAE decode (2 = validé ; 4 OOM en hires)
 SDCPP_TIMEOUT = int(os.getenv("PF_SDCPP_TIMEOUT", "1800"))     # secondes, kill si dépassé (~10 min mesuré)
 SDCPP_I2V_WIDTH = int(os.getenv("PF_SDCPP_I2V_WIDTH", "320"))      # i2v : base alignée sur le T2V -> hires latent x2 = 640
