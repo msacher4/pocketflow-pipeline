@@ -15,6 +15,10 @@ log = logging.getLogger("pocketflow-pipeline")
 
 DOWNLOADS_DIR = Path(__file__).parent.parent.parent / "downloads"
 
+# Nombre d'images Danbooru retenues par slot i2v, utilisées comme références
+# d'identité pour la génération Klein (une par nœud ReferenceLatent).
+REF_COUNT = 2
+
 
 class RealCharacterImageNode(AsyncNode):
     """Recherche et télécharge les images RÉELLES des personnages (run alt),
@@ -22,9 +26,14 @@ class RealCharacterImageNode(AsyncNode):
 
     Pour chaque slot du blueprint marqué `mode == "i2v"` :
     1. Recherche les posts Danbooru rating:g du personnage.
-    2. Un LLM choisit le visuel le plus adapté (portrait 9:16, grande résolution).
-    3. Télécharge l'image et l'écrit dans `generated_images` avec `confirmed: True`
-       (validation automatique, skip Telegram).
+    2. Un LLM choisit les visuels les plus adaptés (portrait 9:16, grande résolution).
+    3. Télécharge REF_COUNT images et les écrit dans `generated_images` avec
+       `confirmed: True` (validation automatique, skip Telegram). La 1re reste
+       dans `image_path`, la liste complète est dans `reference_paths`.
+
+    Ces images ne sont PAS des frames I2V : ce sont des références d'identité,
+    consommées par ComfyUIKleinRefImageGenerator pour produire l'image de source
+    réellement animée.
 
     Si UN des slots i2v n'a pas d'image (perso trop récent / non taggé), on ne
     fabrique pas de fallback : le run est abandonné et on relate vers l'ActionFinder
@@ -64,23 +73,28 @@ class RealCharacterImageNode(AsyncNode):
             if not character.get("name"):
                 missing_ids.append(slot.get("id"))
                 continue
-            path, file_url = await self._fetch_one(slot, character, dest_dir, shared, used_urls)
-            if path:
+            paths, file_urls = await self._fetch_refs(slot, character, dest_dir, shared, used_urls)
+            if paths:
                 generated.append({
                     "slot_id": slot.get("id"),
                     "prompt": slot.get("prompt", ""),
-                    "image_path": path,
+                    "image_path": paths[0],
+                    "reference_paths": paths,
                     "confirmed": True,
                 })
-                if file_url:
-                    used_urls.add(file_url)
+                used_urls.update(file_urls)
             else:
                 missing_ids.append(slot.get("id"))
 
         return json.dumps({"generated_images": generated, "missing_ids": missing_ids},
                           ensure_ascii=False)
 
-    async def _fetch_one(self, slot, character, dest_dir, shared, exclude_urls=frozenset()) -> tuple[str | None, str]:
+    async def _fetch_refs(self, slot, character, dest_dir, shared, exclude_urls=frozenset()) -> tuple[list[str], list[str]]:
+        """Télécharge jusqu'à REF_COUNT images Danbooru pour ce slot.
+
+        Retourne (chemins locaux, file_urls correspondants). Les deux listes ont la
+        même longueur ; une liste vide signifie « personnage introuvable ».
+        """
         posts = await asyncio.to_thread(search_posts, character)
         if exclude_urls:
             posts = [p for p in posts if p.get("file_url") not in exclude_urls]
@@ -88,7 +102,7 @@ class RealCharacterImageNode(AsyncNode):
             log.warning(f"Slot {slot.get('id')}: aucun post Danbooru pour "
                         f"{character.get('name')} ({character.get('franchise')})"
                         + (f" hors {len(exclude_urls)} déjà retenu(s)" if exclude_urls else ""))
-            return None, ""
+            return [], []
 
         ctx_lines = [
             f"Personnage recherché: {character.get('name')} "
@@ -98,11 +112,14 @@ class RealCharacterImageNode(AsyncNode):
             "Contraintes : image SAFE/pour tous publics, visuel reconnaissable du "
             "personnage, de préférence format portrait (hauteur > largeur) et grande "
             "résolution pour un fond de vidéo.",
+            f"Nécessite {REF_COUNT} visuels DIFFÉRENTS du même personnage : ils servent "
+            "de références d'identité pour générer l'image de départ de la vidéo. Renvoie "
+            f"donc {REF_COUNT} file_url distincts dans `images`, du meilleur au secondaire.",
         ]
         if exclude_urls:
             ctx_lines.append(
                 "IMPORTANT : les images suivantes ont DEJA ETE retenues pour d'autres "
-                f"plans. Choisis UN VISUEL OBLIGATOIREMENT DIFFERENT (file_url à ne "
+                f"plans. Choisis des VISUELS OBLIGATOIREMENT DIFFERENTS (file_url à ne "
                 f"PAS réutiliser) :\n{json.dumps(sorted(exclude_urls), ensure_ascii=False)}"
             )
         ctx_lines.append(f"Candidats (posts) :\n{json.dumps(posts, ensure_ascii=False)[:6000]}")
@@ -122,37 +139,47 @@ class RealCharacterImageNode(AsyncNode):
             if exclude_urls:
                 candidates = [_c for _c in candidates if _c.get("file_url") not in exclude_urls]
         if not candidates:
-            candidates = [self._fallback_choice(posts, exclude_urls)] if self._fallback_choice(posts, exclude_urls) else []
+            candidates = self._fallback_choices(posts, exclude_urls)
         if not candidates:
-            return None, ""
+            return [], []
 
-        dest = str(dest_dir / f"char_{slot.get('id')}.img")
-        path = None
-        file_url = ""
+        paths: list[str] = []
+        file_urls: list[str] = []
+        seen: set[str] = set()
         for cand in candidates:
-            path = await asyncio.to_thread(download_image, cand["file_url"], dest)
-            if path:
-                file_url = cand["file_url"]
+            if len(paths) >= REF_COUNT:
                 break
-        if path:
-            log.info(f"Slot {slot.get('id')}: image réelle Danbooru -> {path}")
-        return path, file_url
+            url = cand["file_url"]
+            if url in seen:
+                continue
+            seen.add(url)
+            dest = str(dest_dir / f"char_{slot.get('id')}_{len(paths) + 1}.img")
+            path = await asyncio.to_thread(download_image, url, dest)
+            if path:
+                paths.append(path)
+                file_urls.append(url)
+        if paths:
+            log.info(f"Slot {slot.get('id')}: {len(paths)} image(s) réelle(s) Danbooru -> {paths}")
+        return paths, file_urls
 
     @staticmethod
-    def _fallback_choice(posts, exclude_urls=frozenset()):
-        """Choisit par défaut le post portrait (h > w) de plus grande surface, en
-        excluant les URLs déjà utilisées par d'autres slots."""
+    def _fallback_choices(posts, exclude_urls=frozenset(), count: int = REF_COUNT):
+        """Posts portrait (h > w) de plus grande surface, URLs déjà exclues.
+
+        Renvoie jusqu'à `count` candidats, du meilleur au moins bon.
+        """
         if not posts:
-            return None
+            return []
         if exclude_urls:
             posts = [p for p in posts if p.get("file_url") not in exclude_urls]
         if not posts:
-            return None
-        return sorted(
+            return []
+        ranked = sorted(
             [p for p in posts if p.get("h", 0) > p.get("w", 0)] or posts,
             key=lambda p: p.get("h", 0) * p.get("w", 0),
             reverse=True,
-        )[0]
+        )
+        return ranked[:count]
 
     async def post_async(self, shared, prep, exec):
         try:

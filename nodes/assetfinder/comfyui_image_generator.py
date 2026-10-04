@@ -112,14 +112,16 @@ class ComfyUIImageGenerator(AsyncNode):
             await _set_traces(shared.get("_traces", {}))
             raise RuntimeError("ComfyUIImageGenerator aborted: exec is not valid JSON")
 
-        shared["generated_images"] = data.get("generated_images", [])
+        # `prev` doit être lu AVANT l'écrasement, sinon `kept` ressort vide et
+        # une regen partielle efface les images de tous les autres slots.
+        new_images = data.get("generated_images", [])
+        new_ids = {img.get("slot_id") for img in new_images}
+        prev = shared.get("generated_images", [])
+        kept = [img for img in prev if img.get("slot_id") not in new_ids]
+        shared["generated_images"] = kept + new_images
         partial = shared.get("_slots_to_regenerate")
         if partial:
-            prev = shared.get("generated_images", [])
-            new_ids = {img.get("slot_id") for img in shared["generated_images"]}
-            kept = [img for img in prev if img.get("slot_id") not in new_ids]
-            shared["generated_images"] = kept + shared["generated_images"]
-            log.info(f"ComfyUIImageGenerator: merged {len(data.get('generated_images', []))} regen + {len(kept)} kept")
+            log.info(f"ComfyUIImageGenerator: merged {len(new_images)} regen + {len(kept)} kept")
         shared["_current_step"] = "comfyui_image_gen_done"
         shared["steps"].append({
             "step": "comfyui_image_gen", "status": "ok",
