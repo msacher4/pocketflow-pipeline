@@ -80,6 +80,7 @@ class RealCharacterImageNode(AsyncNode):
                     "prompt": slot.get("prompt", ""),
                     "image_path": paths[0],
                     "reference_paths": paths,
+                    "source": "danbooru",
                     "confirmed": True,
                 })
                 used_urls.update(file_urls)

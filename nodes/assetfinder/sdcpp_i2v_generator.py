@@ -21,18 +21,38 @@ FPS = float(SDCPP_FPS)
 
 
 def _find_image_for_slot(shared: dict, slot_id) -> str | None:
-    """Retrouve le chemin de l'image validée pour un slot dans generated_images.
+    """Retrouve le chemin de l'image de frame 0 pour un slot dans generated_images.
 
-    Priorité : image marquée 'confirmed' (validée en phase 1), puis la plus récente
-    du slot.
+    Les trois producteurs d'image écrivent la même clé `source` pour lever
+    l'ambiguïté :
+      - `danbooru`     : scan source de RealCharacterImageNode (confirmed=True)
+      - `klein_ref`    : frame 0 synthétisée par Klein depuis les 2 références
+                         Danbooru (ComfyUIKleinRefImageGenerator)
+      - `klein_txt2img`: Klein sans référence, utilisé par la regen Telegram
+
+    Priorité : la frame 0 du pipeline est l'image Klein, pas le scan. Les
+    producteurs remplacent les entrées du même slot, donc en régime normal il
+    reste une seule entrée par slot ; la priorité sert à trancher les états
+    mixtes (partial Klein, regen, entrée legacy sans `source`) au lieu de
+    dépendre de l'ordre d'insertion.
     """
     images = shared.get("generated_images", [])
     candidates = [i for i in images if i.get("slot_id") == slot_id]
     if not candidates:
         return None
+
+    # 1. Frame 0 Klein : la plus récente des images synthétisées pour ce slot.
+    klein = [i for i in candidates
+             if i.get("source") in ("klein_ref", "klein_txt2img") and i.get("image_path")]
+    if klein:
+        return klein[-1].get("image_path")
+
+    # 2. Image explicitement validée (phase 1, avant Klein).
     for img in candidates:
-        if img.get("confirmed"):
+        if img.get("confirmed") and img.get("image_path"):
             return img.get("image_path")
+
+    # 3. Dernière image connue du slot.
     return candidates[-1].get("image_path") if candidates[-1].get("image_path") else None
 
 

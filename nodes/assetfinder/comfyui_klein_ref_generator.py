@@ -121,6 +121,7 @@ class ComfyUIKleinRefImageGenerator(AsyncNode):
                 "expected": slot.get("expected", ""),
                 "image_path": path,
                 "reference_paths": refs,
+                "source": "klein_ref",
                 "confirmed": False,
             })
 

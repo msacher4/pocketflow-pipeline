@@ -87,6 +87,7 @@ class ComfyUIImageGenerator(AsyncNode):
                 "prompt": prompt,
                 "expected": slot.get("expected", ""),
                 "image_path": path,
+                "source": "klein_txt2img",
                 "confirmed": False,
             })
 

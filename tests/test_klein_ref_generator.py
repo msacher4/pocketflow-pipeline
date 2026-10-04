@@ -158,7 +158,58 @@ def test_reference_paths_helper_accepte_legacy_str():
     print("test_reference_paths_helper_accepte_legacy_str PASSED")
 
 
+def test_source_prioritaire_sur_confirmed():
+    """État MIXTE : le scan Danbooru (confirmed=True) et l'image Klein coexistent.
+
+    Avant le champ `source`, `_find_image_for_slot` privilégiait `confirmed`
+    et renvoyait donc le SCAN DANBOORU alors que la frame 0 du pipeline est
+    l'image Klein. En pratique les producteurs remplacent les entrées du même
+    slot, mais tout état mixte (partial Klein, regen, entrée legacy) faisait
+    basculer l'I2V et le rewrite sur un scan brut.
+    """
+    shared = {
+        "generated_images": [
+            {"slot_id": 1, "image_path": "/danbooru/scan.jpg",
+             "source": "danbooru", "confirmed": True},
+            {"slot_id": 1, "image_path": "/out/klein_1.png",
+             "source": "klein_ref", "confirmed": False},
+        ]
+    }
+    assert _find_image_for_slot(shared, 1) == "/out/klein_1.png"
+    print("test_source_prioritaire_sur_confirmed PASSED")
+
+
+def test_klein_txt2img_ecrase_klein_ref():
+    """La regen Telegram (Klein sans référence) doit rester prioritaire : elle
+    est postérieure à la frame 0 de référence et c'est elle que l'utilisateur
+    vient de valider."""
+    shared = {
+        "generated_images": [
+            {"slot_id": 1, "image_path": "/out/klein_ref_1.png", "source": "klein_ref"},
+            {"slot_id": 1, "image_path": "/out/regen_1.png", "source": "klein_txt2img"},
+        ]
+    }
+    assert _find_image_for_slot(shared, 1) == "/out/regen_1.png"
+    print("test_klein_txt2img_ecrase_klein_ref PASSED")
+
+
+def test_legacy_sans_source_retombe_sur_confirmed():
+    """Entrée legacy sans `source` : on garde le comportement historique
+    (confirmed d'abord) au lieu de ne plus jamais trouver d'image."""
+    shared = {
+        "generated_images": [
+            {"slot_id": 4, "image_path": "/legacy.jpg", "confirmed": True},
+            {"slot_id": 4, "image_path": "/legacy2.jpg", "confirmed": False},
+        ]
+    }
+    assert _find_image_for_slot(shared, 4) == "/legacy.jpg"
+    print("test_legacy_sans_source_retombe_sur_confirmed PASSED")
+
+
 if __name__ == "__main__":
+    test_source_prioritaire_sur_confirmed()
+    test_klein_txt2img_ecrase_klein_ref()
+    test_legacy_sans_source_retombe_sur_confirmed()
     test_reference_paths_helper_accepte_legacy_str()
     test_find_image_returns_klein_not_danbooru()
     test_confirmed_danbooru_entry_disparue()
