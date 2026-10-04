@@ -12,6 +12,7 @@ from .voice_generator import VoiceGenerator
 from .montage_planner import MontagePlannerNode
 from .sdcpp_i2v_generator import SDCppI2VNode
 from .comfyui_image_generator import ComfyUIImageGenerator
+from .comfyui_klein_ref_generator import ComfyUIKleinRefImageGenerator
 from .real_character_image import RealCharacterImageNode
 from .alt_i2v import AltI2VNode
 from .rewrite_i2v_prompt import RewriteI2VPromptNode
@@ -86,19 +87,26 @@ def build_assetfinder_alt_flow() -> AsyncFlow:
 
     Comme build_assetfinder_flow, MAIS :
     - AssetPlannerAltNode marque les 2 premiers slots visuels en I2V ;
-    - RealCharacterImageNode récupère les images RÉELLES du personnage ;
+    - RealCharacterImageNode récupère les images RÉELLES du personnage (2 par
+      slot, utilisées comme références d'identité, pas comme frames) ;
+    - ComfyUIKleinRefImageGenerator produit l'image I2V à partir de ces
+      références : le prompt du slot décrit la scène, Klein dessine un visuel
+      neuf qui ressemble au personnage ;
     - RewriteI2VPromptNode réécrit les prompts I2V pour qu'ils correspondent aux
       images réellement sélectionnées (sinon le modèle vidéo déforme la frame 0) ;
     - ValidateI2V envoie chaque image + prompt réécrit sur Telegram (boutons OK/KO)
       et reboucle sur les seuls slots rejetés (regen_image → real, regen_prompt → rewrite) ;
     - SDCppVideoGenerator (T2V) ignore les slots i2v, qui sont générés par
-      AltI2VNode (image réelle → vidéo, automatique) ;
+      AltI2VNode (image Klein → vidéo, automatique) ;
     - les slots i2v en échec retombent en T2V via un second passage svg.
-    La regen I2V Telegram (validate -> image_gen -> sdcpp_i2v) est conservée.
+    La regen I2V Telegram (validate -> image_gen -> sdcpp_i2v) est conservée :
+    le bouton de regen du montage repasse par Klein SANS référence (txt2img),
+    donc volontairement sans continuité d'identité avec le Danbooru.
     """
     init = InitCleanup(step="init_cleanup_alt")
     ap = AssetPlannerAltNode()
     real = RealCharacterImageNode()
+    klein_ref = ComfyUIKleinRefImageGenerator()
     rewrite_i2v_prompt = RewriteI2VPromptNode()
     validate_i2v = ValidateI2V()
     cleanup = CleanupLlamaProxy()
@@ -133,7 +141,7 @@ def build_assetfinder_alt_flow() -> AsyncFlow:
                  "_slots_to_regenerate", "_video_action", "_i2v_phase", "_i2v_image_prompt"],
     )
 
-    init >> ap >> real >> rewrite_i2v_prompt >> validate_i2v >> cleanup >> free_svg >> svg
+    init >> ap >> real >> klein_ref >> rewrite_i2v_prompt >> validate_i2v >> cleanup >> free_svg >> svg
     validate_i2v - "regen_image" >> real
     validate_i2v - "regen_prompt" >> rewrite_i2v_prompt
     svg - "default" >> alt_i2v

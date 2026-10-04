@@ -20,9 +20,14 @@ log = logging.getLogger("pocketflow-pipeline")
 COMFYUI_URL = "http://127.0.0.1:8188"
 COMFYUI_SERVICE = "comfyui.service"
 COMFYUI_START_TIMEOUT = 120
+REPO_WORKFLOWS_DIR = Path(__file__).parent.parent / "workflows"
 WORKFLOWS_DIR = Path(__file__).parent.parent.parent / "mcp" / "comfyui-mcp" / "workflows"
 COMFYUI_OUTPUT = Path("/media/marcs/Linux_Apps/Projets_AI/ComfyUI/output")
 COMFYUI_INPUT = Path("/media/marcs/Linux_Apps/Projets_AI/ComfyUI/input")
+
+# Nombre d'images de référence câblées dans generate_image_klein_ref.json
+# (une paire LoadImage -> ImageScaleToTotalPixels -> VAEEncode -> 2 ReferenceLatent).
+REF_IMAGE_SLOTS = 2
 
 S2_HOST = "127.0.0.1"
 S2_PORT = 5236
@@ -87,10 +92,16 @@ async def comfyui_free(unload_models: bool = True, free_memory: bool = True) -> 
 
 
 def _load_workflow(name: str) -> dict:
-    path = WORKFLOWS_DIR / f"{name}.json"
-    if not path.is_file():
-        raise FileNotFoundError(f"Workflow not found: {path}")
-    return json.loads(path.read_text())
+    """Charge un workflow API-format.
+
+    Le dépôt est prioritaire (workflows versionnés avec le code) ; le dossier
+    externe prend le relais pour les workflows historiques qui n'y sont pas.
+    """
+    for base in (REPO_WORKFLOWS_DIR, WORKFLOWS_DIR):
+        path = base / f"{name}.json"
+        if path.is_file():
+            return json.loads(path.read_text())
+    raise FileNotFoundError(f"Workflow not found: {name} (ni {REPO_WORKFLOWS_DIR} ni {WORKFLOWS_DIR})")
 
 
 def _fill_params(workflow: dict, params: dict) -> dict:
@@ -222,6 +233,88 @@ async def comfyui_generate_image(
     img_path = _find_output_image(outputs)
     if not img_path:
         log.error(f"ComfyUI image: no output found for {prompt_id}")
+        return None
+    return _copy_to_dest(img_path, dest_dir, name)
+
+
+async def comfyui_generate_image_ref(
+    prompt: str,
+    negative_prompt: str,
+    reference_images: list[str],
+    dest_dir: Path,
+    name: str,
+    seed: int | None = None,
+    width: int = 320,
+    height: int = 576,
+    steps: int = 4,
+    cfg: float = 1.0,
+) -> str | None:
+    """Génère une image Klein 4B guidée par jusqu'à 2 images de RÉFÉRENCE.
+
+    Topologie calquée sur le workflow officiel `Image Edit (Flux.2 Klein 4B
+    Distilled)` : EmptyFlux2LatentImage 128ch/16, Flux2Scheduler,
+    RandomNoise + KSamplerSelect + CFGGuider + SamplerCustomAdvanced,
+    références à 1 MP en `nearest-exact`, négatif obtenu par
+    ConditioningZeroOut sur le positif.
+
+    `steps=4` et `cfg=1.0` ne sont pas choisis au hasard : ce sont les valeurs
+    du modèle DISTILLED (flux-2-klein-4b, 4 steps). Le modèle base en veut 25/4.0.
+
+    `negative_prompt` est conservé pour la compatibilité d'appel mais IGNORÉ :
+    le workflow officiel ne fait pas d'encodage négatif séparé.
+
+    Le canvas reste vide : le prompt décrit la scène, les références
+    n'apportent que l'identité. C'est ce qui distingue cette fonction du mode
+    "édition", où la référence est encodée comme canvas et où la composition
+    d'origine est conservée.
+
+    `reference_images` est limitée à 2 entrées (nombre de nœuds
+    ReferenceLatent du workflow). Un seul chemin est accepté : la référence est
+    dupliquée.
+    """
+    import random
+
+    refs = [str(r) for r in reference_images if r and Path(r).is_file()]
+    if not refs:
+        log.error(f"ComfyUI image ref: aucune image de référence valide pour {name}")
+        return None
+    while len(refs) < REF_IMAGE_SLOTS:
+        refs.append(refs[-1])
+
+    wf = _load_workflow("generate_image_klein_ref")
+    params = {
+        "PARAM_PROMPT": prompt,
+        "PARAM_NEGATIVE_PROMPT": negative_prompt or "blurry, low quality, text, watermark",
+        "PARAM_INT_SEED": seed if seed is not None else random.randint(0, 2**32),
+        "PARAM_INT_STEPS": steps,
+        "PARAM_FLOAT_CFG": cfg,
+        "PARAM_STR_SAMPLER_NAME": "euler",
+        "PARAM_STR_SCHEDULER": "normal",
+        "PARAM_FLOAT_DENOISE": 1.0,
+        "PARAM_INT_WIDTH": width,
+        "PARAM_INT_HEIGHT": height,
+        "PARAM_MODEL": "flux-2-klein-4b-Q8_0.gguf",
+    }
+    for i, src in enumerate(refs[:REF_IMAGE_SLOTS], start=1):
+        copied = COMFYUI_INPUT / f"klein_ref_{name}_{i}{Path(src).suffix}"
+        shutil.copy2(src, copied)
+        log.info(f"Reference {i} -> {copied}")
+        params[f"PARAM_REF_IMAGE_{i}"] = copied.name
+
+    filled = _fill_params(wf, params)
+    unresolved = {
+        k for node in filled.values() if isinstance(node, dict)
+        for k, v in node.get("inputs", {}).items()
+        if isinstance(v, str) and v.startswith("PARAM_")
+    }
+    if unresolved:
+        raise RuntimeError(f"Workflow klein_ref: PARAM_ non résolus : {sorted(unresolved)}")
+
+    prompt_id = await comfyui_submit(filled)
+    outputs = await comfyui_poll(prompt_id, timeout_s=600)
+    img_path = _find_output_image(outputs)
+    if not img_path:
+        log.error(f"ComfyUI image ref: no output found for {prompt_id}")
         return None
     return _copy_to_dest(img_path, dest_dir, name)
 

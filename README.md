@@ -17,6 +17,8 @@ router
 - **ActuFinder** : pioche un flux Google News RSS "personnage féminin", filtre les sources vidéo-only bloquées (YouTube, TikTok…), synthétise un article, vérifie la présence d'un personnage.
 - **ScriptWriter (alt)** : écrit le script de 3-8 plans (`### HOOK / ##1 BODY / ##2 OUTRO`), VO par plan, avec validation LLM (cohérence VO + structure pydantic) et **auto-repair mécanique** des erreurs d'horaires (sans rappel LLM). Approbation via boutons Telegram.
 - **AssetPlanner (alt)** : découpe le script en slots. Les 1ʳᵉ `Video:` des Plans 1 et 2 sont marquées **I2V** (image réelle du personnage → vidéo), les autres en **T2V**. Garantie **max 2 vidéos par plan**.
+- **RealCharacterImage (alt)** : récupère **2 images Danbooru** par slot I2V. Elles ne servent **pas** de frame de départ, mais de références d'identité.
+- **ComfyUI Klein Ref (alt)** : génère l'image I2V avec **Klein 4B en guidage par référence** (nœud natif `ReferenceLatent`). Le prompt décrit la scène et le canvas reste vide : on n'anime donc plus une photo Danbooru, mais une image neuve du personnage. Voir la section dédiée plus bas.
 - **SDCpp VideoGenerator (T2V) / AltI2V (I2V)** : génération vidéo via stable-diffusion.cpp (LTX 2.5, spec 97 frames @24fps, base 320×576 → upscale ×2 = 640×1152), garde-fou "headcount" sur les prompts (1 personne max).
 - **Musique / Voix / Montage** : ACE-Step (TTS) pour la VO, xtts/acestep pour la musique (durée cible calculée depuis le nombre de mots de la VO), montage ffmpeg avec `apad` (bonus : la sortie n'est plus tronquée par la musique plus courte).
 
@@ -107,6 +109,65 @@ Toutes sont chargées depuis `.env` via `python-dotenv` (`load_dotenv()` en têt
 
 ⚠️ **Ne jamais commiter le `.env` rempli.** Les autres réglages non-sensibles (`PF_SDCPP_*`, `PF_ACESTEP_*`, chemins, modèles LLM…) ont des valeurs par défaut en dur dans `config.py` et restent optionnels.
 
+## Image I2V : Klein 4B en guidage par référence (chemin alt)
+
+Avant, l'image Danbooru téléchargée par `RealCharacterImageNode` servait
+directement de frame de départ à l'I2V. Problème : une photo Danbooru est
+choisie pour être un bon **portrait**, pas une image animée — la pose et le
+cadrage sont figés et le modèle vidéo déforme la frame 0.
+
+Désormais, sur le chemin alt :
+
+```
+RealCharacterImage (2 img Danbooru / slot, references d'identité)
+  → ComfyUIKleinRefImageGenerator  ← Klein 4B, canvas vide, references injectées
+  → RewriteI2VPrompt (LLM vision, voit l'image Klein)
+  → ValidateI2V (Telegram : c'est l'image Klein qui est validée)
+  → … → AltI2V
+```
+
+**Mécanisme ComfyUI.** FLUX.2 Klein 4B unifie génération et édition : il accepte
+des images de référence via le nœud natif `ReferenceLatent`
+(`ComfyUI/comfy_extras/nodes_edit_model.py`), qui injecte les latents encodés des
+références dans le conditioning. **Aucun modèle supplémentaire n'est requis** — pas
+d'IPAdapter, pas de `clip_vision`, les 3 poids sont déjà là (`flux-2-klein-4b-Q8_0.gguf`,
+`Qwen3-4B-Q8_0.gguf`, `ae.safetensors`).
+
+**Canvas vide + `denoise=1.0`.** C'est le point le plus important. Brancher la
+référence comme canvas reviendrait au mode « édition » de ComfyUI, qui conserve la
+composition d'origine et donc largely la photo Danbooru. Ici `EmptyLatentImage`
+décrit la sortie, le prompt pilote la composition, et les références ne portent que
+l'identité. `tests/test_klein_ref_workflow.py` verrouille ce câblage.
+
+**Les références sont attachées au positif ET au négatif** (comme dans le blueprint
+officiel `ComfyUI/blueprints/Image Edit (Flux.2 Klein 4B).json`) : les tokens de
+référence doivent appartenir aux deux séquences, sinon le CFG casse.
+
+**Deux références par slot**, enchaînées (`ReferenceLatent` accepte le chaining).
+Chacune est réduite à 0,75 MP et alignée sur 16 (`ImageScaleToTotalPixels`) pour
+borner le nombre de tokens d'attention. Avec une seule référence disponible, la
+seconde duplique la première.
+
+**Substitution, pas ajout.** `_find_image_for_slot` privilégie la première entrée
+`confirmed` de `generated_images`, et les images Danbooru arrivent avec
+`confirmed: True`. Le nœud Klein **remplace** donc l'entrée du slot (et
+`confirmed: False`) : sinon l'I2V continuerait d'animer le Danbooru. Les chemins de
+référence sont conservés dans `reference_paths`, ce qui permet au nœud Klein de
+relancer une génération.
+
+**Portée limitée au chemin alt, volontairement.** Le bouton « ❌ Refaire l'image »
+de la validation du montage reste sur `ComfyUIImageGenerator` (Klein txt2img
+**sans** référence) : une nouvelle image entièrement différente, sans continuité
+d'identité avec le Danbooru. Seule la chaîne `real >> klein_ref >> rewrite >>
+validate` utilise le nœud à références. Conséquence : après un regen via ce
+bouton, l'entrée du slot n'a plus de `reference_paths` — sans effet ici, la
+validation I2V étant déjà passée ; `validate_i2v -"regen_image" >> real` les
+retélécharge si besoin.
+
+**Workflow versionné** : `workflows/generate_image_klein_ref.json`. `_load_workflow`
+cherche le dépôt en priorité puis retombe sur le dossier externe historique, donc les
+14 workflows existants ne bougent pas.
+
 ## Config I2V validée (LTX-2.5, 16 Go)
 
 Ces valeurs ont été **validées visuellement** sur le build local de `stable-diffusion.cpp` (`sdcpp-video-memory-control`). Elles sont mesurées, pas supposées : chaque ligne ci-dessous a été obtenue en observant le rendu. Ne pas les changer sans revalider.
@@ -131,7 +192,9 @@ Le `--fps` est passé explicitement sur les deux chemins (T2V et I2V) : `sd-cli`
 
 **Limites connues, non testées :**
 
-- La chaîne **Klein 320×576 → I2V 320×576** n'a jamais été exercée de bout en bout. L'image source passe de 540×960 à 320×576 (2,25× moins de pixels) via ComfyUI. Si la qualité des images de source se dégrade, c'est la première chose à vérifier.
+- La chaîne **Klein 320×576 → I2V 320×576** n'a toujours pas été exercée de bout en bout sur le chemin alt, maintenant avec image source **générée par référence**. Si la qualité des images de source se dégrade, c'est la première chose à vérifier.
+- **Le rendu Klein avec références n'a pas encore été validé visuellement** : le graphe est validé hors ligne (`tests/test_klein_ref_workflow.py`), mais aucune image n'a encore été produite avec `ReferenceLatent`. Premier point à vérifier : si l'identité ne transparaît pas, basculer `EmptyLatentImage` → `EmptyFlux2LatentImage` (le blueprint officiel FLUX.2 utilise le second).
+- **VRAM** : le nœud Klein s'exécute alors que le proxy llama (`qwen-opus` / `gemma4-12b`) est encore chargé. En cas d'OOM, insérer le `CleanupLlamaProxy` déjà importé avant Klein — `RewriteI2VPromptNode` sait déjà réveiller la vision.
 - **Un seul slot** a été validé. La boucle multi-slots et `post_async` (merge dans `generated_videos`, `return "regen"` sur échec) n'ont pas été exercés.
 - Le T2V **n'a pas été revalidé** : il conserve `--hires-steps 4` / tuile 128, sa valeur d'origine.
 
