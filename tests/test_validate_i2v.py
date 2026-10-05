@@ -245,12 +245,13 @@ def test_cablage_flow_alt():
 
 
 def test_cleanup_avant_klein_ref():
-    """Le cleanup llama doit s'executer AVANT klein_ref, pas apres validate_i2v.
+    """Le cleanup doit s'executer AVANT klein_ref, pas apres validate_i2v.
 
-    ComfyUI (Klein 4B) monte a ~15.9 Go sur 16 Go : avec le LLM resident la
-    cohabitation echoue. `real` reste avant le cleanup car il utilise le LLM
-    pour choisir parmi les posts Danbooru, et rewrite_i2v_prompt reste
-    apres car il reveille le modele vision a la demande.
+    ComfyUI (Klein 4B) monte a ~15.9 Go sur 16 Go : avec les LLM residents la
+    cohabitation echoue. Il faut donc tomber les DEUX serveurs — llama-proxy 8080
+    ET Jev-Omni 8977 — d'ou CleanupLlamaJev plutot que CleanupLlamaProxy.
+    `real` reste avant le cleanup car il reveille Jev-Omni, et rewrite_i2v_prompt
+    reste apres car il reveille le modele vision a la demande.
     """
     from nodes.assetfinder import build_assetfinder_alt_flow
 
@@ -262,11 +263,20 @@ def test_cleanup_avant_klein_ref():
         return type(node).__name__
 
     assert _name(real) == "RealCharacterImageNode", _name(real)
-    cleanup = real.successors.get("default")
-    assert cleanup is not None and _name(cleanup) == "CleanupLlamaProxy", real.successors
+
+    # validate_refs est entre real et le cleanup : dernier filet humain avant
+    # de lancer Klein.
+    validate_refs = real.successors.get("default")
+    assert validate_refs is not None and _name(validate_refs) == "ValidateCharacterRefs", real.successors
+
+    # CleanupLlamaJev et NON CleanupLlamaProxy : le proxy seul laisserait
+    # Jev-Omni charge (~7 Go) pendant que Klein monte a ~15.9 Go sur 16 Go.
+    cleanup = validate_refs.successors.get("default")
+    assert cleanup is not None and _name(cleanup) == "CleanupLlamaJev", validate_refs.successors
+
     klein = cleanup.successors.get("default")
     assert klein is not None and _name(klein) == "ComfyUIKleinRefImageGenerator", cleanup.successors
-    log.info("PASSED (real -> cleanup -> klein_ref)")
+    log.info("PASSED (real -> validate_refs -> CleanupLlamaJev -> klein_ref)")
 
 
 def test_retry_no_image_terminal():

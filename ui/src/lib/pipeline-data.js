@@ -44,6 +44,7 @@ export const NODE_TYPES = {
   // AssetFinder subflow
   asset_planner:{ icon: '📋', label: 'AssetPlanner',       model: 'qwen-opus' },
   cleanup_llama_proxy:{ icon: '🧹', label: 'CleanupLlama', model: '' },
+  cleanup_llama_jev:{ icon: '🧹', label: 'Cleanup Llama+Jev', model: '' },
   combined_cleanup:{ icon: '🧹', label: 'Cleanup All', model: '' },
   init_cleanup:{ icon: '🧹', label: 'Init Cleanup', model: '' },
   init_cleanup_alt:{ icon: '🧹', label: 'Init Cleanup (alt)', model: '' },

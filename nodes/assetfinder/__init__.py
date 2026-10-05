@@ -1,5 +1,6 @@
 from .asset_planner import AssetPlannerNode, AssetPlannerAltNode
 from .cleanup_llama_proxy import CleanupLlamaProxy
+from .cleanup_llama_jev import CleanupLlamaJev
 from .combined_cleanup import CombinedCleanup
 from .init_cleanup import InitCleanup
 from .sdcpp_video_generator import SDCppVideoGenerator
@@ -113,7 +114,7 @@ def build_assetfinder_alt_flow() -> AsyncFlow:
     klein_ref = ComfyUIKleinRefImageGenerator()
     rewrite_i2v_prompt = RewriteI2VPromptNode()
     validate_i2v = ValidateI2V()
-    cleanup = CleanupLlamaProxy()
+    cleanup_jev = CleanupLlamaJev()
     mp = MontagePlannerNode()
 
     svg = SDCppVideoGenerator()
@@ -145,18 +146,20 @@ def build_assetfinder_alt_flow() -> AsyncFlow:
                  "_slots_to_regenerate", "_video_action", "_i2v_phase", "_i2v_image_prompt"],
     )
 
-    # Le cleanup llama passe AVANT klein_ref : ComfyUI charge ~15.9 Go et
-    # n'a pas la place de cohabiter avec le LLM. `real` s'execute avant (il
-    # reveille Jev-Omni sur son instance dediee 8977) et rewrite_i2v_prompt
-    # apres (il reveille le modele vision a la demande, llama-server le charge
-    # tout seul).
+    # cleanup_jev (llama-proxy 8080 + Jev-Omni 8977) passe AVANT klein_ref :
+    # ComfyUI monte a ~15.9 Go sur 16 Go, il faut la VRAM des deux serveurs.
+    # CleanupLlamaProxy ne cleans que le proxy — d'ou un noeud dedie, pour que
+    # le graphe montre que Jev tombe aussi.
+    # `real` s'execute avant (il reveille Jev-Omni sur son instance dediee 8977)
+    # et rewrite_i2v_prompt apres (il reveille le modele vision a la demande,
+    # llama-server le charge tout seul).
     #
     # validate_refs est entre real et klein_ref : c'est le dernier filet avant
     # generation. Jev-Omni ne sait dire que "un seul personnage ou pas" — dire si
     # c'est LE bon personnage reste un jugement humain, donc on ne lance pas Klein
     # sans ton accord Telegram. Un rejet reboucle vers `real`, qui blacklist l'URL
     # et pioche le candidat suivant.
-    init >> ap >> real >> validate_refs >> cleanup >> klein_ref >> rewrite_i2v_prompt >> validate_i2v >> free_svg >> svg
+    init >> ap >> real >> validate_refs >> cleanup_jev >> klein_ref >> rewrite_i2v_prompt >> validate_i2v >> free_svg >> svg
     # Slot I2V sans image reelle -> on re-selectionne un autre article
     # (AltRetryGate -> actufinder, borne a ALT_RETRY_MAX). Sans ce edge le
     # sous-flux s'arretait sur "Flow ends: 'retry_no_image' not found".

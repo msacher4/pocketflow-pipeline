@@ -239,3 +239,62 @@ async def headcount_on_image(image_path: str) -> dict:
         "confidence": confidence,
         "probabilities": res["probabilities"],
     }
+
+
+def stop_server() -> dict:
+    """Arrête le llama-server Jev pour libérer sa VRAM.
+
+    Renvoie {'status': 'stopped'|'absent'|'failed', ...}. Ne lève jamais : un
+    cleanup qui échoue ne doit pas faire tomber le run, et 'absent' est le cas
+    normal quand le daemon redémarre (le serveur avait été lancé par le run
+    précédent, pas par ce process).
+
+    On se fie d'abord au handle _SERVER_PROC, mais on vérifie le port aussi : le
+    serveur peut tourner alors qu'on n'est pas celui qui l'a démarré (lancement
+    manuel, run précédent encore vivant).
+    """
+    global _SERVER_PROC
+    results = {"pid": None, "signal": None, "port_still_up": None}
+
+    proc = _SERVER_PROC
+    if proc is not None and proc.poll() is None:
+        results["pid"] = proc.pid
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=20)
+                results["signal"] = "SIGTERM"
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+                results["signal"] = "SIGKILL"
+            log.info("jev_omni: llama-server arrêté (pid %s, %s)",
+                     results["pid"], results["signal"])
+        except Exception as e:
+            results["error"] = f"{type(e).__name__}: {e}"
+            log.warning("jev_omni: arrêt impossible: %s", e)
+
+    # Handle absent ou déjà mort : le port décide si un serveur traîne encore.
+    try:
+        import httpx
+        r = httpx.get(f"{JEV_OMNI_URL}/health", timeout=5)
+        still_up = r.status_code == 200
+    except Exception:
+        still_up = False
+    results["port_still_up"] = still_up
+
+    _SERVER_PROC = None
+
+    if results.get("error"):
+        results["status"] = "failed"
+    elif results["pid"] or not still_up:
+        results["status"] = "stopped"
+    else:
+        # Joignable mais pas arrêté : ni handle ni signal n'ont agi. On le dit
+        # plutôt que de le masquer, Klein va manquer de VRAM.
+        results["status"] = "still_up"
+    log.info("jev_omni: stop_server -> %s", results["status"])
+    return results
