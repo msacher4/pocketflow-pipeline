@@ -204,12 +204,50 @@ def build_af_validate_debug_flow() -> AsyncFlow:
     return AsyncFlow(start=validate)
 
 
+ALT_FIXTURE_DIRNAME = "Test assetfoinder alt"
+
+
+def _parse_alt_fixture_character(raw: str) -> dict:
+    """Déduit {name, franchise} d'une ligne de fixture type « Nom de l'oeuvre ».
+
+    L'oeuvre n'est pas décorative : build_query() fait « nom + oeuvre » parce
+    que le nom seul est ambigu (les tags Danbooru lilly_* ramenaient des
+    personnages homonymes). La garder évite de retomber dans ce piège.
+    """
+    text = " ".join(str(raw or "").split())
+    if not text:
+        return {}
+    for sep in (" from ", " de ", " — ", " - "):
+        head, found, tail = text.partition(sep)
+        if found and head.strip() and tail.strip():
+            return {"name": head.strip(), "franchise": tail.strip()}
+    return {"name": text, "franchise": ""}
+
+
+def _load_alt_fixture() -> dict:
+    """Lit tests/<ALT_FIXTURE_DIRNAME>/ (script + Perso) s'il existe.
+
+    Permet de rejouer un run ALT sur un vrai script sans réécrire le harness.
+    Les valeurs par défaut (Saber Alter) restent le filet si le dossier est absent.
+    """
+    from pathlib import Path
+    base = Path(__file__).parent / "tests" / ALT_FIXTURE_DIRNAME
+    fixture: dict = {}
+    script_file = base / "script"
+    perso_file = base / "Perso"
+    if script_file.is_file():
+        fixture["script"] = script_file.read_text()
+    if perso_file.is_file():
+        fixture["character"] = _parse_alt_fixture_character(perso_file.read_text())
+    return fixture
+
+
 def build_af_alt_validate_debug_flow() -> AsyncFlow:
     """Test isolé du flow AssetFinder complet du chemin ALT.
 
-    Va de l'AssetPlannerAlt (parse du script → blueprint + 2 I2V marqués)
+    Va de l'AssetPlannerAlt (parse le script → blueprint + 2 I2V marqués)
     jusqu'à la validation finale Telegram des assets (validate_af), en passant
-    par RealCharacterImage (images réelles Danbooru), RewriteI2VPrompt, montage,
+    par RealCharacterImage (images réelles icrawler), RewriteI2VPrompt, montage,
     T2V (sd-cli), etc. Script + selected_article injectés via shared."""
     return build_assetfinder_alt_flow()
 
@@ -219,7 +257,11 @@ async def run_af_alt_validate_debug():
     global _CURRENT_SHARED
     from pathlib import Path
     script_path = Path(__file__).parent / "tests" / "debug_alt_script.txt"
-    script = script_path.read_text() if script_path.is_file() else "Script de test alt."
+    fixture = _load_alt_fixture()
+    script = fixture.get("script")
+    if not script:
+        script = script_path.read_text() if script_path.is_file() else "Script de test alt."
+    character = fixture.get("character") or {"name": "Saber Alter", "franchise": "Fate"}
 
     shared = {
         "topic": "anime",
@@ -229,17 +271,19 @@ async def run_af_alt_validate_debug():
             "source": "Anime News Network",
             "url": "https://www.animenewsnetwork.com/news/2026-09-10/test",
             "synthesis": "Type-Moon has officially revealed Saber Alter (Artoria Pendragon Alter) as a playable servant in the upcoming Fate/EXTRA Record remake. The announcement was made during a special livestream, showing new gameplay footage and character designs. Saber Alter, originally from Fate/stay night, is a fan-favorite dark version of the iconic Artoria Pendragon. The remake promises updated graphics, new story routes, and reimagined battle systems. Fans have been eagerly awaiting this announcement since the game was first teased in 2024.",
-            "character": {
-                "name": "Saber Alter",
-                "franchise": "Fate",
-            },
+            "character": character,
         },
         "pipeline_id": f"debug-af-alt-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
         "steps": [],
         "_traces": {},
     }
+    log.info(
+        "AF alt debug: %d car. de script, personnage=%s (fixture=%s)",
+        len(script), character, bool(fixture),
+    )
     _CURRENT_SHARED = shared
     await _set_state(pipeline_running=True, current_step="starting", steps=[])
+    action = None
     try:
         flow = build_af_alt_validate_debug_flow()
         action = await flow.run_async(shared)
@@ -249,6 +293,10 @@ async def run_af_alt_validate_debug():
         shared["_error"] = f"{type(e).__name__}: {e}"
     finally:
         await _set_state(**_shared_snapshot(shared, running=False))
+        log.info(
+            "AF alt debug terminé : action=%s erreur=%s steps=%d",
+            action, shared.get("_error"), len(shared.get("steps", [])),
+        )
 
 
 async def run_pipeline_once():
