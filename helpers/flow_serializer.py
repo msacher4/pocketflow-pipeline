@@ -62,7 +62,7 @@ NODE_TYPES = {
     # AssetFinder subflow
     "asset_planner":            {"icon": "📋", "label": "AssetPlanner",         "model": "qwen-opus"},
     "asset_planner_alt":        {"icon": "📋", "label": "Planner Alt (2x I2V)", "model": "qwen-opus"},
-    "real_character_image":     {"icon": "🖼️", "label": "Real Character Img",   "model": "Danbooru"},
+    "real_character_image":     {"icon": "🖼️", "label": "Real Character Img",   "model": "icrawler"},
     "rewrite_i2v_prompt":       {"icon": "✏️", "label": "Rewrite I2V Prompt",   "model": "qwen3.6q2"},
     "validate_i2v":             {"icon": "👤", "label": "Validation I2V",       "model": "Telegram"},
     "alt_i2_v":                 {"icon": "🎥", "label": "Alt I2V",              "model": "LTX-Video 2.3"},

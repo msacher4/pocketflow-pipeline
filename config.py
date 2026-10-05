@@ -66,6 +66,21 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 OPENROUTER_MODEL = "typesafe/jev-1.13"
 
+# Jev-Omni (modèle de décision multimodal LOCAL, repo Reza2kn/Jev-Omni-Q4_K_M-GGUF).
+# Contrairement à typesafe/jev-1.13 qui est text-only sur alpha/decisions, Jev-Omni
+# embarque un mmproj et voit réellement l'image → garde-fou "un seul personnage" sur
+# les références. llama.cpp doit tourner en --embedding --pooling none sur un port
+# DEDIE (le proxy chat 8080 n'expose pas /embedding) ; le helper démarre le sien.
+JEV_OMNI_DIR = os.getenv("PF_JEV_OMNI_DIR", "/media/marcs/Linux_Apps/LLM/JEV Omni")
+JEV_OMNI_GGUF = os.getenv("PF_JEV_OMNI_GGUF", f"{JEV_OMNI_DIR}/Jev-Omni-Unified-Q4_K_M.gguf")
+JEV_OMNI_MMPROJ = os.getenv("PF_JEV_OMNI_MMPROJ", f"{JEV_OMNI_DIR}/mmproj-jev-omni.gguf")
+JEV_OMNI_HEAD = os.getenv("PF_JEV_OMNI_HEAD", f"{JEV_OMNI_DIR}/decision-head-f32.npz")
+JEV_OMNI_URL = os.getenv("PF_JEV_OMNI_URL", "http://127.0.0.1:8977")
+JEV_OMNI_BIN = os.getenv(
+    "PF_JEV_OMNI_BIN", "/media/marcs/Linux_Apps/LLM/llama-gemma4/build/bin/llama-server"
+)
+JEV_OMNI_TIMEOUT = float(os.getenv("PF_JEV_OMNI_TIMEOUT", "180"))
+
 # stable-diffusion.cpp (T2V video generation) — LTX 2.5 (build ltx25, worktree dédié)
 SDCPP_BIN = os.getenv("PF_SDCPP_BIN", "/media/marcs/Linux_Apps/stable-diffusion.cpp_ltx25/build_ltx25/bin/sd-cli")
 # Modèles LTX 2.5 (T2V) — le with-proj est inclus dans le GGUF gemma, pas de connectors.

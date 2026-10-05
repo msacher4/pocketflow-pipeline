@@ -18,6 +18,7 @@ from .retry_no_image import RetryNoImage
 from .alt_i2v import AltI2VNode
 from .rewrite_i2v_prompt import RewriteI2VPromptNode
 from .validate_i2v import ValidateI2V
+from .validate_character_refs import ValidateCharacterRefs
 
 from pocketflow import AsyncFlow
 from nodes.base import ValidationSubFlowNode
@@ -102,11 +103,12 @@ def build_assetfinder_alt_flow() -> AsyncFlow:
     - les slots i2v en échec retombent en T2V via un second passage svg.
     La regen I2V Telegram (validate -> image_gen -> sdcpp_i2v) est conservée :
     le bouton de regen du montage repasse par Klein SANS référence (txt2img),
-    donc volontairement sans continuité d'identité avec le Danbooru.
+    donc volontairement sans continuité d'identité avec les photos de référence.
     """
     init = InitCleanup(step="init_cleanup_alt")
     ap = AssetPlannerAltNode()
     real = RealCharacterImageNode()
+    validate_refs = ValidateCharacterRefs()
     retry_no_image = RetryNoImage()
     klein_ref = ComfyUIKleinRefImageGenerator()
     rewrite_i2v_prompt = RewriteI2VPromptNode()
@@ -145,14 +147,21 @@ def build_assetfinder_alt_flow() -> AsyncFlow:
 
     # Le cleanup llama passe AVANT klein_ref : ComfyUI charge ~15.9 Go et
     # n'a pas la place de cohabiter avec le LLM. `real` s'execute avant (il
-    # utilise le LLM pour choisir parmi les posts Danbooru) et
-    # rewrite_i2v_prompt apres (il reveille le modele vision a la demande,
-    # llama-server le charge tout seul).
-    init >> ap >> real >> cleanup >> klein_ref >> rewrite_i2v_prompt >> validate_i2v >> free_svg >> svg
+    # reveille Jev-Omni sur son instance dediee 8977) et rewrite_i2v_prompt
+    # apres (il reveille le modele vision a la demande, llama-server le charge
+    # tout seul).
+    #
+    # validate_refs est entre real et klein_ref : c'est le dernier filet avant
+    # generation. Jev-Omni ne sait dire que "un seul personnage ou pas" — dire si
+    # c'est LE bon personnage reste un jugement humain, donc on ne lance pas Klein
+    # sans ton accord Telegram. Un rejet reboucle vers `real`, qui blacklist l'URL
+    # et pioche le candidat suivant.
+    init >> ap >> real >> validate_refs >> cleanup >> klein_ref >> rewrite_i2v_prompt >> validate_i2v >> free_svg >> svg
     # Slot I2V sans image reelle -> on re-selectionne un autre article
     # (AltRetryGate -> actufinder, borne a ALT_RETRY_MAX). Sans ce edge le
     # sous-flux s'arretait sur "Flow ends: 'retry_no_image' not found".
     real - "retry_no_image" >> retry_no_image
+    validate_refs - "reject_refs" >> real
     validate_i2v - "regen_image" >> real
     validate_i2v - "regen_prompt" >> rewrite_i2v_prompt
     svg - "default" >> alt_i2v

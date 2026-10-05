@@ -25,9 +25,9 @@ class RewriteI2VPromptNode(AsyncNode):
     (gemma4-12b) et réécrit le prompt pour qu'il décrive fidèlement cette image
     + un mouvement subtil cohérent avec la pose existante.
 
-    L'image montrée n'est PAS un scan Danbooru : c'est l'image Klein générée
+    L'image montrée n'est PAS une photo de référence : c'est l'image Klein générée
     en amont (ComfyUIKleinRefImageGenerator) depuis les 2 références
-    Danbooru du slot. `_find_image_for_slot` la distingue désormais via le
+    du slot. `_find_image_for_slot` la distingue désormais via le
     champ `source`, au lieu de se rabattre sur l'ordre d'insertion.
     """
 
@@ -99,7 +99,7 @@ class RewriteI2VPromptNode(AsyncNode):
             f"Prompt I2V d'origine (écrit à l'aveugle, peut être incohérent) :\n"
             f"{old_prompt}\n\n"
             f"L'image fournie est la frame 0 générée par Klein (et non un scan "
-            f"Danbooru) : elle applique déjà la scène et le cadrage voulus.\n"
+            f"de référence) : elle applique déjà la scène et le cadrage voulus.\n"
             f"Section du plan : {slot.get('section', '')} (position {slot.get('position', 0)})\n"
             f"Réécris le prompt UNIQUEMENT d'après CE QUE TU VOIS dans l'image fournie, "
             f"en injectant un mouvement subtil cohérent avec la pose existante (voir le soul)."

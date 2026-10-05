@@ -13,7 +13,7 @@ log = logging.getLogger("pocketflow-pipeline")
 
 DOWNLOADS_DIR = Path(__file__).parent.parent.parent / "downloads"
 
-# Les références viennent exclusivement de Danbooru (helpers/danbooru.py,
+# Les références viennent exclusivement de la recherche icrawler
 # rating:g), donc ce sont TOUJOURS des illustrations anime. Sans verrou
 # explicite, Klein dérive vers un rendu gras/photoréaliste : le scaler
 # 1 MP `nearest-exact` préserve les lignes nettes du trait anime, et cette
@@ -23,7 +23,7 @@ STYLE_SUFFIX = "anime illustration, clean lineart, cel shading, flat colors"
 
 
 def _reference_paths_for_slot(shared, slot_id) -> list[str]:
-    """Références Danbooru déjà téléchargées pour ce slot par
+    """Références d'identité téléchargées pour ce slot par
     RealCharacterImageNode, relues dans `generated_images`."""
     for img in shared.get("generated_images", []):
         if img.get("slot_id") != slot_id:
@@ -38,10 +38,10 @@ def _reference_paths_for_slot(shared, slot_id) -> list[str]:
 class ComfyUIKleinRefImageGenerator(AsyncNode):
     """Génère l'image I2V de chaque slot avec Klein 4B, GUIDÉE PAR RÉFÉRENCE.
 
-    Au lieu d'utiliser l'image Danbooru telle quelle comme frame de départ
+    Au lieu d'utiliser la photo de référence telle quelle comme frame de départ
     (souvent cadrée/posée pour le portrait et donc inutilisable en vidéo), on
     demande à Klein une image neuve : le prompt du slot décrit la scène, les
-    images Danbooru ne fournissent que l'identité du personnage.
+    photos de référence ne fournissent que l'identité du personnage.
 
     Mécanisme ComfyUI : nœud natif `ReferenceLatent`, qui injecte les latents
     encodés des références dans le conditioning (positif ET négatif). Le canvas
@@ -88,7 +88,7 @@ class ComfyUIKleinRefImageGenerator(AsyncNode):
             slot_id = slot.get("id", "unknown")
             refs = _reference_paths_for_slot(shared, slot_id)
             if not refs:
-                log.error(f"Slot {slot_id}: aucune image de référence Danbooru -> Klein ignoré")
+                log.error(f"Slot {slot_id}: aucune image de référence -> Klein ignoré")
                 continue
 
             prompt = user_image_prompt if user_image_prompt and slot_id in regen else slot.get("prompt", "")
@@ -150,7 +150,7 @@ class ComfyUIKleinRefImageGenerator(AsyncNode):
         new_images = data.get("generated_images", [])
         new_ids = {img.get("slot_id") for img in new_images}
         # REMPLACEMENT, pas ajout : _find_image_for_slot privilégie la première
-        # entrée `confirmed`. Si l'image Danbooru (confirmed=True) survivait,
+        # entrée `confirmed`. Si la photo de référence (confirmed=True) survivait,
         # l'I2V continuerait de l'utiliser au lieu de l'image Klein.
         prev = shared.get("generated_images", [])
         kept = [img for img in prev if img.get("slot_id") not in new_ids]
@@ -160,7 +160,7 @@ class ComfyUIKleinRefImageGenerator(AsyncNode):
         shared["steps"].append({
             "step": "comfyui_klein_ref_gen", "status": "ok",
             "ts": datetime.now(timezone.utc).isoformat(),
-            "output": f"{len(new_images)} image(s) Klein (réf. Danbooru), {len(kept)} conservée(s)",
+            "output": f"{len(new_images)} image(s) Klein (réf. icrawler), {len(kept)} conservée(s)",
         })
         await _set_state(**_shared_snapshot(shared))
         await _set_traces(shared.get("_traces", {}))

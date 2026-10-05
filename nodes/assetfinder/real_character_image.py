@@ -6,38 +6,44 @@ from pathlib import Path
 import asyncio
 from pocketflow import AsyncNode
 
-from config import LLM_MODEL
 from helpers.state import _set_state, _shared_snapshot, _set_traces
-from helpers.call_llm import call_llm, load_soul, _extract_json, _trace_llm
-from helpers.danbooru import search_posts, download_image
+from helpers.icrawler_provider import build_query, search_character_images
+from helpers.jev_omni import headcount_on_image
 
 log = logging.getLogger("pocketflow-pipeline")
 
 DOWNLOADS_DIR = Path(__file__).parent.parent.parent / "downloads"
 
-# Nombre d'images Danbooru retenues par slot i2v, utilisées comme références
-# d'identité pour la génération Klein (une par nœud ReferenceLatent).
-REF_COUNT = 2
+# Nombre de références d'identité récupérées AU TOTAL, et non par slot. Elles sont
+# PARTAGÉES par tous les slots i2v : c'était le bug initial, deux références par
+# slot.times deux slots donnaient quatre images, et rien ne garantissait que les
+# quatre montraient le même personnage — Klein partait alors sur deux personnes
+# différentes. Une seule identité, partagée par tous les plans.
+REF_COUNT_TOTAL = 2
+
+# Nombre de candidats downloaded avant de donner la main à Telegram. On en
+# garderait bien plus s'il n'y avait pas la validation humaine.
+MAX_CANDIDATES = 12
 
 
 class RealCharacterImageNode(AsyncNode):
-    """Recherche et télécharge les images RÉELLES des personnages (run alt),
-    depuis Danbooru (rating:g, SFW exclusivement).
-
-    Pour chaque slot du blueprint marqué `mode == "i2v"` :
-    1. Recherche les posts Danbooru rating:g du personnage.
-    2. Un LLM choisit les visuels les plus adaptés (portrait 9:16, grande résolution).
-    3. Télécharge REF_COUNT images et les écrit dans `generated_images` avec
-       `confirmed: True` (validation automatique, skip Telegram). La 1re reste
-       dans `image_path`, la liste complète est dans `reference_paths`.
+    """Récupère les images RÉELLES du personnage pour les références d'identité Klein.
 
     Ces images ne sont PAS des frames I2V : ce sont des références d'identité,
     consommées par ComfyUIKleinRefImageGenerator pour produire l'image de source
     réellement animée.
 
-    Si UN des slots i2v n'a pas d'image (perso trop récent / non taggé), on ne
-    fabrique pas de fallback : le run est abandonné et on relate vers l'ActionFinder
-    (retry_no_image) pour en sélectionner un autre article (décision 1.a).
+    Chaîne de confiance, du plus large au plus étroit :
+    1. `icrawler` (Google puis repli Bing) cherche « nom + oeuvre ». Le nom seul est
+       ambigu — c'est exactement ce qui a fait échouer Danbooru, où les tags
+       `lilly_*` ramenaient des personnages homonymes sans rapport.
+    2. Jev-Omni écarte les images qui montrent plusieurs personnages : il VOIT
+       l'image (contrairement au JEV hébergé, text-only).
+    3. ValidateCharacterRefs demande confirmation sur Telegram avant Klein.
+
+    Les 2 références retenues sont communes à tous les slots i2v. Si on n'obtient
+    pas 2 références, on ne fabrique pas de fallback : le run est abandonné et on
+    relate vers l'ActionFinder (retry_no_image).
     """
 
     def __init__(self):
@@ -65,122 +71,121 @@ class RealCharacterImageNode(AsyncNode):
         dest_dir = DOWNLOADS_DIR / pipeline_id / "real"
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        generated = []
-        missing_ids = []
-        used_urls: set[str] = set()
-        for slot in i2v_slots:
-            character = slot.get("character") or {}
-            if not character.get("name"):
-                missing_ids.append(slot.get("id"))
-                continue
-            paths, file_urls = await self._fetch_refs(slot, character, dest_dir, shared, used_urls)
-            if paths:
-                generated.append({
-                    "slot_id": slot.get("id"),
-                    "prompt": slot.get("prompt", ""),
-                    "image_path": paths[0],
-                    "reference_paths": paths,
-                    "source": "danbooru",
-                    "confirmed": True,
-                })
-                used_urls.update(file_urls)
-            else:
-                missing_ids.append(slot.get("id"))
+        # Les références étant partagées, c'est le personnage du premier slot i2v
+        # qui fait foi pour tout le run.
+        character = (i2v_slots[0].get("character") or {})
+        if not character.get("name"):
+            log.warning("RealCharacterImage: slot i2v sans nom de personnage")
+            return json.dumps(
+                {"generated_images": [], "missing_ids": [s.get("id") for s in i2v_slots]},
+                ensure_ascii=False,
+            )
 
-        return json.dumps({"generated_images": generated, "missing_ids": missing_ids},
+        refs = await self._fetch_refs(character, dest_dir, shared)
+        if len(refs) < REF_COUNT_TOTAL:
+            missing_ids = [s.get("id") for s in i2v_slots]
+            log.warning(
+                f"RealCharacterImage: {len(refs)} référence(s) pour "
+                f"{character.get('name')} (il en faut {REF_COUNT_TOTAL}) -> retry_no_image"
+            )
+            return json.dumps({"generated_images": [], "missing_ids": missing_ids},
+                              ensure_ascii=False)
+
+        for ref in refs:
+            ref["total"] = len(refs)
+        shared["character_refs"] = refs
+        self._write_manifest(pipeline_id, character, refs)
+
+        generated = [{
+            "slot_id": slot.get("id"),
+            "prompt": slot.get("prompt", ""),
+            "image_path": refs[0]["path"],
+            "reference_paths": [r["path"] for r in refs],
+            "source": "icrawler",
+            "confirmed": True,
+        } for slot in i2v_slots]
+
+        return json.dumps({"generated_images": generated, "missing_ids": []},
                           ensure_ascii=False)
 
-    async def _fetch_refs(self, slot, character, dest_dir, shared, exclude_urls=frozenset()) -> tuple[list[str], list[str]]:
-        """Télécharge jusqu'à REF_COUNT images Danbooru pour ce slot.
+    async def _fetch_refs(self, character: dict, dest_dir: Path, shared: dict) -> list[dict]:
+        """Icropper -> filtre headcount Jev-Omni -> 2 références communes.
 
-        Retourne (chemins locaux, file_urls correspondants). Les deux listes ont la
-        même longueur ; une liste vide signifie « personnage introuvable ».
+        Une erreur Jev ne fait PAS rejeter le candidat : on le garde et on le signale,
+        c'est la validation Telegram qui tranche. Rejeter sur une panne de modèle
+        ferait perdre des images parfaitement bonnes.
         """
-        posts = await asyncio.to_thread(search_posts, character)
-        if exclude_urls:
-            posts = [p for p in posts if p.get("file_url") not in exclude_urls]
-        if not posts:
-            log.warning(f"Slot {slot.get('id')}: aucun post Danbooru pour "
-                        f"{character.get('name')} ({character.get('franchise')})"
-                        + (f" hors {len(exclude_urls)} déjà retenu(s)" if exclude_urls else ""))
-            return [], []
+        query = build_query(character)
+        log.info(f"RealCharacterImage: recherche icrawler « {query} »")
 
-        ctx_lines = [
-            f"Personnage recherché: {character.get('name')} "
-            f"(oeuvre: {character.get('franchise', '')})",
-            f"Section du plan: {slot.get('section', '')} (position {slot.get('position', 0)})",
-            f"Visuel attendu pour ce plan: {slot.get('content') or slot.get('prompt', '')[:400]}",
-            "Contraintes : image SAFE/pour tous publics, visuel reconnaissable du "
-            "personnage, de préférence format portrait (hauteur > largeur) et grande "
-            "résolution pour un fond de vidéo.",
-            f"Nécessite {REF_COUNT} visuels DIFFÉRENTS du même personnage : ils servent "
-            "de références d'identité pour générer l'image de départ de la vidéo. Renvoie "
-            f"donc {REF_COUNT} file_url distincts dans `images`, du meilleur au secondaire.",
-        ]
-        if exclude_urls:
-            ctx_lines.append(
-                "IMPORTANT : les images suivantes ont DEJA ETE retenues pour d'autres "
-                f"plans. Choisis des VISUELS OBLIGATOIREMENT DIFFERENTS (file_url à ne "
-                f"PAS réutiliser) :\n{json.dumps(sorted(exclude_urls), ensure_ascii=False)}"
-            )
-        ctx_lines.append(f"Candidats (posts) :\n{json.dumps(posts, ensure_ascii=False)[:6000]}")
-        ctx = "\n".join(ctx_lines)
-
-        soul = load_soul("choose_character_image")
-        resp = await call_llm(LLM_MODEL, soul, ctx)
-        _trace_llm(shared, "real_character_image_choose", "exec", LLM_MODEL, soul, ctx, resp)
-        try:
-            decision = _extract_json(resp)
-        except Exception:
-            decision = {}
-        images = decision.get("images") if isinstance(decision.get("images"), list) else None
-        candidates = []
-        if images:
-            candidates = [_c for _c in images if isinstance(_c, dict) and _c.get("file_url")]
-            if exclude_urls:
-                candidates = [_c for _c in candidates if _c.get("file_url") not in exclude_urls]
+        candidates = await asyncio.to_thread(
+            search_character_images, query, str(dest_dir / "candidates"),
+            MAX_CANDIDATES * 2, MAX_CANDIDATES,
+        )
         if not candidates:
-            candidates = self._fallback_choices(posts, exclude_urls)
-        if not candidates:
-            return [], []
+            log.warning(f"RealCharacterImage: aucun candidat pour « {query} »")
+            return []
 
-        paths: list[str] = []
-        file_urls: list[str] = []
-        seen: set[str] = set()
+        blacklisted = set(shared.get("_rejected_ref_urls") or [])
+        if blacklisted:
+            before = len(candidates)
+            candidates = [c for c in candidates if c["url"] not in blacklisted]
+            log.info(f"RealCharacterImage: {before - len(candidates)} candidat(s) "
+                     f"blacklisté(s) par la validation Telegram")
+
+        refs: list[dict] = []
         for cand in candidates:
-            if len(paths) >= REF_COUNT:
+            if len(refs) >= REF_COUNT_TOTAL:
                 break
-            url = cand["file_url"]
-            if url in seen:
+            verdict = await headcount_on_image(cand["path"])
+            if verdict.get("ok") and verdict.get("verdict") == "reject":
                 continue
-            seen.add(url)
-            dest = str(dest_dir / f"char_{slot.get('id')}_{len(paths) + 1}.img")
-            path = await asyncio.to_thread(download_image, url, dest)
-            if path:
-                paths.append(path)
-                file_urls.append(url)
-        if paths:
-            log.info(f"Slot {slot.get('id')}: {len(paths)} image(s) réelle(s) Danbooru -> {paths}")
-        return paths, file_urls
+            refs.append({
+                "path": cand["path"],
+                "url": cand["url"],
+                "source": cand["source"],
+                "w": cand["w"],
+                "h": cand["h"],
+                "headcount": verdict,
+            })
+
+        if refs:
+            log.info(
+                f"RealCharacterImage: {len(refs)} référence(s) d'identité pour "
+                f"{character.get('name')} -> {[r['path'] for r in refs]}"
+            )
+        return refs
 
     @staticmethod
-    def _fallback_choices(posts, exclude_urls=frozenset(), count: int = REF_COUNT):
-        """Posts portrait (h > w) de plus grande surface, URLs déjà exclues.
+    def _write_manifest(pipeline_id: str, character: dict, refs: list[dict]) -> None:
+        """Trace les URLs sources des références.
 
-        Renvoie jusqu'à `count` candidats, du meilleur au moins bon.
+        Sans ça on se retrouve avec des .img anonymes impossibles à diagnostiquer —
+        c'est ce qui a rendu le run Danbooru 20261004_184955 opaque.
         """
-        if not posts:
-            return []
-        if exclude_urls:
-            posts = [p for p in posts if p.get("file_url") not in exclude_urls]
-        if not posts:
-            return []
-        ranked = sorted(
-            [p for p in posts if p.get("h", 0) > p.get("w", 0)] or posts,
-            key=lambda p: p.get("h", 0) * p.get("w", 0),
-            reverse=True,
-        )
-        return ranked[:count]
+        manifest = {
+            "pipeline_id": pipeline_id,
+            "character": {"name": character.get("name"), "franchise": character.get("franchise")},
+            "refs": [
+                {
+                    "path": r["path"],
+                    "url": r["url"],
+                    "source": r["source"],
+                    "dimensions": [r["w"], r["h"]],
+                    "headcount": r.get("headcount", {}).get("choice"),
+                    "headcount_confidence": r.get("headcount", {}).get("confidence"),
+                }
+                for r in refs
+            ],
+        }
+        try:
+            base = DOWNLOADS_DIR / pipeline_id
+            base.mkdir(parents=True, exist_ok=True)
+            (base / "character_refs.json").write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError as e:
+            log.warning(f"RealCharacterImage: manifest non écrit: {e}")
 
     async def post_async(self, shared, prep, exec):
         try:
@@ -204,11 +209,11 @@ class RealCharacterImageNode(AsyncNode):
         kept = [i for i in prev if i.get("slot_id") not in {g["slot_id"] for g in new_images}]
         shared["generated_images"] = kept + new_images
 
-        shared["_current_step"] = "real_character_image_done"
+        refs = shared.get("character_refs") or []
         shared["steps"].append({
             "step": "real_character_image", "status": "ok",
             "ts": datetime.now(timezone.utc).isoformat(),
-            "output": f"{len(new_images)} image(s) réelle(s), {len(missing_ids)} manquante(s)",
+            "output": f"{len(refs)} référence(s) commune(s), {len(missing_ids)} slot(s) sans image",
         })
         await _set_state(**_shared_snapshot(shared))
         await _set_traces(shared.get("_traces", {}))

@@ -25,15 +25,15 @@ def _find_image_for_slot(shared: dict, slot_id) -> str | None:
 
     Les trois producteurs d'image écrivent la même clé `source` pour lever
     l'ambiguïté :
-      - `danbooru`     : scan source de RealCharacterImageNode (confirmed=True)
+      - `icrawler`     : photo de référence de RealCharacterImageNode (confirmed=True)
       - `klein_ref`    : frame 0 synthétisée par Klein depuis les 2 références
-                         Danbooru (ComfyUIKleinRefImageGenerator)
+                         de la recherche icrawler (ComfyUIKleinRefImageGenerator)
       - `klein_txt2img`: Klein sans référence, utilisé par la regen Telegram
 
-    Priorité : la frame 0 du pipeline est l'image Klein, pas le scan. Les
-    producteurs remplacent les entrées du même slot, donc en régime normal il
-    reste une seule entrée par slot ; la priorité sert à trancher les états
-    mixtes (partial Klein, regen, entrée legacy sans `source`) au lieu de
+    Priorité : la frame 0 du pipeline est l'image Klein, pas la photo de
+    référence. Les producteurs remplacent les entrées du même slot, donc en
+    régime normal il reste une seule entrée par slot ; la priorité sert à trancher
+    les états mixtes (partial Klein, regen, entrée legacy sans `source`) au lieu de
     dépendre de l'ordre d'insertion.
     """
     images = shared.get("generated_images", [])

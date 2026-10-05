@@ -12,7 +12,7 @@ class RetryNoImage(AsyncNode):
     """Termine le sous-flux alt en "retry_no_image" pour reboucler sur l'ActuFinder.
 
     RealCharacterImageNode renvoie "retry_no_image" quand un slot I2V n'a pas
-    d'image reelle (personnage introuvable sur Danbooru). Sans successeur
+    d'image reelle (personnage introuvable via icrawler). Sans successeur
     cable, le sous-flux s'arretait sur :
 
         Flow ends: 'retry_no_image' not found in ['default']
