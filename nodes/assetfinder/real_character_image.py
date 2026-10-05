@@ -6,7 +6,7 @@ from pathlib import Path
 import asyncio
 from pocketflow import AsyncNode
 
-from helpers.state import _set_state, _shared_snapshot, _set_traces
+from helpers.state import _set_state, _shared_snapshot, _set_traces, _save_sub_shared
 from helpers.icrawler_provider import build_query, search_character_images
 from helpers.jev_omni import headcount_on_image
 
@@ -81,7 +81,8 @@ class RealCharacterImageNode(AsyncNode):
                 ensure_ascii=False,
             )
 
-        refs = await self._fetch_refs(character, dest_dir, shared)
+        refs, checks = await self._fetch_refs(character, dest_dir, shared)
+        self._publish_checks(character, refs, checks, build_query(character))
         if len(refs) < REF_COUNT_TOTAL:
             missing_ids = [s.get("id") for s in i2v_slots]
             log.warning(
@@ -108,8 +109,14 @@ class RealCharacterImageNode(AsyncNode):
         return json.dumps({"generated_images": generated, "missing_ids": []},
                           ensure_ascii=False)
 
-    async def _fetch_refs(self, character: dict, dest_dir: Path, shared: dict) -> list[dict]:
+    async def _fetch_refs(self, character: dict, dest_dir: Path,
+                          shared: dict) -> tuple[list[dict], list[dict]]:
         """Icropper -> filtre headcount Jev-Omni -> 2 références communes.
+
+        Renvoie (refs, checks). `checks` note UN enregistrement par candidat,
+        rejets compris : c'est ce qui s'affiche dans le popup Svelte. Avant, un
+        rejet partait en `continue` sans être gardé, donc rien ne montrait
+        jamais pourquoi un candidat avait été écarté.
 
         Une erreur Jev ne fait PAS rejeter le candidat : on le garde et on le signale,
         c'est la validation Telegram qui tranche. Rejeter sur une panne de modèle
@@ -124,7 +131,7 @@ class RealCharacterImageNode(AsyncNode):
         )
         if not candidates:
             log.warning(f"RealCharacterImage: aucun candidat pour « {query} »")
-            return []
+            return [], []
 
         blacklisted = set(shared.get("_rejected_ref_urls") or [])
         if blacklisted:
@@ -134,11 +141,24 @@ class RealCharacterImageNode(AsyncNode):
                      f"blacklisté(s) par la validation Telegram")
 
         refs: list[dict] = []
+        checks: list[dict] = []
         for cand in candidates:
             if len(refs) >= REF_COUNT_TOTAL:
                 break
             verdict = await headcount_on_image(cand["path"])
-            if verdict.get("ok") and verdict.get("verdict") == "reject":
+            ok = bool(verdict.get("ok"))
+            checks.append({
+                "file": Path(cand["path"]).name,
+                "dimensions": [cand["w"], cand["h"]],
+                "source": cand["source"],
+                "url": cand["url"],
+                "headcount": verdict.get("choice"),
+                "confidence": verdict.get("confidence"),
+                "verdict": verdict.get("verdict") if ok else "erreur",
+                "error": None if ok else verdict.get("reason"),
+                "accepted": ok and verdict.get("verdict") == "accept",
+            })
+            if not (ok and verdict.get("verdict") == "accept"):
                 continue
             refs.append({
                 "path": cand["path"],
@@ -154,7 +174,30 @@ class RealCharacterImageNode(AsyncNode):
                 f"RealCharacterImage: {len(refs)} référence(s) d'identité pour "
                 f"{character.get('name')} -> {[r['path'] for r in refs]}"
             )
-        return refs
+        return refs, checks
+
+    @staticmethod
+    def _publish_checks(character: dict, refs: list[dict], checks: list[dict],
+                        query: str) -> None:
+        """Publie les verdicts Jev dans le sous-store, lus par le popup Svelte.
+
+        Sans cet appel, le popup affiche « Aucune donnée pour cette étape » : c'est
+        le symptôme signalé. La vue générique fait déjà fetchSubShared() sur ce
+        stepId, donc aucune modification du front n'est nécessaire.
+        """
+        _save_sub_shared("real_character_image", {
+            "character": character.get("name"),
+            "query": query,
+            "counters": {
+                "candidates": len(checks),
+                "accepted": sum(1 for c in checks if c["accepted"]),
+                "rejected": sum(1 for c in checks
+                                if not c["accepted"] and c["verdict"] == "reject"),
+                "errors": sum(1 for c in checks if c["verdict"] == "erreur"),
+                "refs_used": len(refs),
+            },
+            "checks": checks,
+        })
 
     @staticmethod
     def _write_manifest(pipeline_id: str, character: dict, refs: list[dict]) -> None:
