@@ -56,18 +56,41 @@ class RewriteI2VPromptNode(AsyncNode):
 
         soul = load_soul("rewrite_i2v_prompt")
         rewritten = []
-        for slot in i2v_slots:
-            slot_id = slot.get("id")
-            image_path = _find_image_for_slot(shared, slot_id)
-            old_prompt = slot.get("prompt", "")
-            if not image_path or not old_prompt:
-                log.warning(f"RewriteI2VPrompt: slot {slot_id} sans image/prompt, prompt inchangé")
-                continue
-            new_prompt = await self._rewrite_prompt(slot, image_path, old_prompt, soul)
-            if new_prompt:
-                slot["prompt"] = new_prompt
-                rewritten.append({"slot_id": slot_id, "image_path": image_path})
+        try:
+            for slot in i2v_slots:
+                slot_id = slot.get("id")
+                image_path = _find_image_for_slot(shared, slot_id)
+                old_prompt = slot.get("prompt", "")
+                if not image_path or not old_prompt:
+                    log.warning(f"RewriteI2VPrompt: slot {slot_id} sans image/prompt, prompt inchangé")
+                    continue
+                new_prompt = await self._rewrite_prompt(slot, image_path, old_prompt, soul)
+                if new_prompt:
+                    slot["prompt"] = new_prompt
+                    rewritten.append({"slot_id": slot_id, "image_path": image_path})
+        finally:
+            await self._release_vision(rewritten)
         return json.dumps({"rewritten": rewritten}, ensure_ascii=False)
+
+    async def _release_vision(self, rewritten: list[dict]) -> None:
+        """Relâche le serveur vision une fois les prompts réécrits.
+
+        Indispensable : le wake vision (+8 Go de VRAM) a lieu APRÈS le nœud de
+        cleanup, donc rien ne le relâchait avant le T2V. sd-cli (LTX2.5 22B) se
+        retrouvait alors avec un budget de 682 Mo et mourait sur « cannot make
+        enough memory available », produisant 0 vidéo pour tout le run.
+        """
+        if not rewritten:
+            return
+        base = LLM_URL.split("/v1/")[0]
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(f"{base}/api/proxy/cleanup")
+                resp.raise_for_status()
+                log.info(f"RewriteI2VPrompt: vision relâchée après {len(rewritten)} prompt(s)")
+        except Exception as e:
+            # Non bloquant : mais on le signale, car c'est la cause d'un T2V à vide.
+            log.warning(f"RewriteI2VPrompt: release vision non bloquant échoué: {e}")
 
     async def _wake_vision(self) -> None:
         """Réveille le serveur vision via proxy-switch avant l'appel (idempotent).
