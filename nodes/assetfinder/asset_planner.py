@@ -15,6 +15,9 @@ log = logging.getLogger("pocketflow-pipeline")
 
 SFX_LIBRARY_FILE = Path(__file__).parent.parent.parent / "VFX" / "sfx_library.json"
 
+# Nombre de slots i2v par script (les 2 premiers visuels). Les autres restent T2V.
+I2V_SLOT_COUNT = 2
+
 SFX_CATEGORY_INTENT = {
     "whooshes": "transition de plan, changement de rythme",
     "impacts": "coupe franche, moment fort (impact metal)",
@@ -601,14 +604,15 @@ class AssetPlannerAltNode(AssetPlannerNode):
         character = (shared.get("selected_article", {}) or {}).get("character") or {}
         slots = decision.get("slots", [])
         visual_slots = [s for s in slots if s.get("type") == "visual"]
-        # Il n'y a QUE 2 I2V par script : la 1re Video: du Plan 1 et la 1re
-        # Video: du Plan 2. Tous les autres assets sont des T2V.
-        marked = set()
-        for s in visual_slots:
-            pi = s.get("plan_index")
-            if pi in (1, 2) and pi not in marked:
-                marked.add(pi)
-                s["mode"] = "i2v"
-                if character:
-                    s["character"] = character
-        log.info(f"AssetPlannerAlt -> {len(marked)} asset(s) I2V marqué(s) (1re Video Plan 1 & 2)")
+        # Il n'y a QUE 2 I2V par script, tous les autres assets sont des T2V.
+        # On marque les 2 PREMIERS slots visuels EXISTANTS, et non « le plan 1 et
+        # le plan 2 » : un script dont le Plan 1 n'a pas de ligne Video: (hook
+        # purement texte) n'a aucun slot pour le plan 1, et la règle par
+        # plan_index n'en marquait qu'un seul -> Klein ne recevait qu'une image.
+        for s in visual_slots[:I2V_SLOT_COUNT]:
+            s["mode"] = "i2v"
+            if character:
+                s["character"] = character
+        marked = sum(1 for s in visual_slots if s.get("mode") == "i2v")
+        log.info(f"AssetPlannerAlt -> {marked}/{I2V_SLOT_COUNT} asset(s) I2V marqué(s) "
+                 f"sur {len(visual_slots)} slot(s) visuel(s)")
