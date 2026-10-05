@@ -254,7 +254,7 @@ class GeneratedScriptAlt(GeneratedScript):
     @field_validator("script")
     @classmethod
     def script_max_two_video_per_plan(cls, v):
-        """Max 2 vidéos (lignes Video:) par plan — un beat de 7s (I2V+T2V)
+        """Max 2 vidéos (lignes Video:) par plan — un beat de 8s (2 assets)
         suffit pour une VO courte. Jamais de 3e, 4e asset pour allonger."""
         if not v or not v.strip():
             return v
@@ -312,7 +312,7 @@ class GeneratedScriptAlt(GeneratedScript):
     @classmethod
     def script_vo_short(cls, v):
         """Filet de sécurité absolu : une VO au-delà de 20 mots ne rentre même
-        pas sur 2 vidéos par plan (I2V+T2V = 7s ≈ 18 mots, 2 T2V = 8s ≈ 20 mots)
+        pas sur 2 vidéos par plan (2 assets = 8s ≈ 20 mots, 1 asset = 4s ≈ 12 mots)
         à 2 mots/sec + filet +4. Doit être simplifiée — on ne splitte jamais."""
         if not v or not v.strip():
             return v
@@ -335,7 +335,7 @@ class GeneratedScriptAlt(GeneratedScript):
     @classmethod
     def script_vo_plan_duration(cls, v):
         """Chaque VO doit tenir dans la durée de SON plan. La durée d'un plan = la
-        SOMME des durées de ses assets (I2V≈3s, T2V≈4s). Si la phrase dépasse, le
+        SOMME des durées de ses assets (I2V≈4s, T2V≈4s). Si la phrase dépasse, le
         beat doit recevoir des assets vidéo supplémentaires — jamais tronqué."""
         from nodes.scriptwriter.script_timing import pacing_errors
         errs = pacing_errors(v)
@@ -673,15 +673,34 @@ class AltPydanticScriptValidationNode(PydanticScriptValidationNode):
         # c'est LE symptôme du slop TikTok générique (clip 2 du 22/09). JEV en panne
         # (ok=False) → skip, jamais de blocage (le run continue).
         from helpers.headcount_guard import classify_headcount
+
+        # Découpe I2V / T2V — source de vérité unique (helpers.i2v_slots), la même
+        # fonction que celle qui marque `mode: i2v` dans l'AssetPlanner. On collecte
+        # d'abord les plans de chaque ligne Video: (et la VO du même plan) parce que
+        # les deux contrôles JEV portent sur des sous-ensembles différents.
         plan_idx = None
+        vo_by_plan = {}
+        shots = []  # [(plan_index, texte Video:), ...] dans l'ordre du script
         for line in value.splitlines():
             m = re.match(r"^\s*[-*]?\s*Plan\s*(\d+)\s*\(", line)
             if m:
                 plan_idx = int(m.group(1))
                 continue
+            if re.match(r"^\s*[-*]?\s*VO\s*:", line, re.IGNORECASE):
+                vo_by_plan.setdefault(
+                    plan_idx,
+                    re.sub(r"^\s*[-*]?\s*VO\s*:\s*", "", line, flags=re.IGNORECASE),
+                )
+                continue
             if not re.match(r"^\s*[-*]?\s*Video\s*:", line, re.IGNORECASE):
                 continue
-            text = re.sub(r"^\s*[-*]?\s*Video\s*:\s*", "", line, flags=re.IGNORECASE)
+            shots.append((plan_idx, re.sub(
+                r"^\s*[-*]?\s*Video\s*:\s*", "", line, flags=re.IGNORECASE)))
+
+        from helpers.i2v_slots import I2V_SLOT_COUNT, i2v_slot_positions
+        i2v_pos = i2v_slot_positions([p for p, _ in shots], I2V_SLOT_COUNT)
+
+        for plan_idx, text in shots:
             verdict = await classify_headcount(text)
             if not verdict.get("ok"):
                 log.info(f"AltPydantic JEV -> JEV indisponible pour Video plan {plan_idx}, skip")
@@ -697,4 +716,42 @@ class AltPydanticScriptValidationNode(PydanticScriptValidationNode):
                         "LTX invente un deuxième personnage de fond → vidéo générique. "
                         "Ajoute 'alone' (ou `lone`/`solo`) dans la description."
                     )}
+
+        # JEV b-roll par ligne T2V — la règle éditoriale du run : les 2 premières
+        # vidéos sont des I2V (le personnage doit y être filmé), TOUS les autres
+        # plans sont du b-roll et ne doivent montrer PERSONNE de reconnaissable :
+        # ils portent l'IDÉE de la VO du plan (décor, objet, mains en détail,
+        # scène vide, foule de dos). C'était la cause du slop : la règle
+        # "décris la physionomie dans CHAQUE Video:" forçait 6 plans sur 7 à
+        # reparler de la même fille. Ici on ne touche QUE les T2V (positions
+        # hors i2v_pos), jamais les ancrages I2V.
+        # Violation → préfixe ASSET(plan N) → routage auto vers le VideoAssetFixer
+        # (is_asset_error), qui réécrit la SEULE ligne fautive. JEV en panne → skip.
+        from helpers.broll_guard import classify_broll
+        for pos, (plan_idx, text) in enumerate(shots):
+            if pos in i2v_pos:
+                continue
+            verdict = await classify_broll(
+                text, vo_by_plan.get(plan_idx, ""), name, franchise)
+            if not verdict.get("ok"):
+                log.info(f"AltPydantic JEV b-roll -> JEV indisponible pour Video plan "
+                         f"{plan_idx}, skip")
+                continue
+            choice = verdict.get("choice")
+            conf = verdict.get("confidence", 0.0)
+            if choice == "character_visible" and conf >= 0.8:
+                who = name or "le personnage central"
+                vo = (vo_by_plan.get(plan_idx, "") or "").strip()
+                return {"valid": False, "error": (
+                    f"ASSET(plan {plan_idx}): ce plan est un T2V (b-roll) mais la Video: "
+                    f"montre {who} comme une personne visible (JEV conf {conf:.2f}). "
+                    f"Règle : seules les {I2V_SLOT_COUNT} premières vidéos sont des I2V "
+                    f"(personnage filmé) ; tous les autres plans doivent être des inserts "
+                    f"qui portent l'IDÉE de la VO, sans le personnage. "
+                    + (f"La VO de ce plan est « {vo[:120]} » : réécris la Video: comme un "
+                       f"plan d'insert sur cette idée (décor, objet, mains en détail, "
+                       f"scène vide, foule de dos, environnement)." if vo else
+                       "Réécris la Video: comme un plan d'insert (décor, objet, mains "
+                       "en détail, scène vide, foule de dos, environnement).")
+                )}
         return {"valid": True}

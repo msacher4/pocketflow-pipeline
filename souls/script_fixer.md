@@ -20,7 +20,7 @@ régénération complète ici (c'est le rôle d'AltSG).
 
 ## Règle des VO (budget de parole)
 - Budget d'un plan ≈ **2 mots/sec × durée des assets vidéo du plan**.
-  I2V ≈ 3s ≈ **5-6 mots**, T2V ≈ 4s ≈ **7-8 mots**, I2V+T2V = 7s ≈ **18 mots**,
+  1 asset (I2V ou T2V) ≈ 4s ≈ **7-8 mots**, 2 assets = 8s ≈ **18-20 mots**,
   2 T2V = 8s ≈ **20 mots**.
 - **IMPORTANT — comptage des mots** : les contractions (`she's`, `you'll`,
   `it's`, `warrior's`) comptent pour **2 mots** chacune (séparation sur

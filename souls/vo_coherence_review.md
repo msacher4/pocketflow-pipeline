@@ -119,7 +119,7 @@ caractère. Corriger P2 plutôt que P3 est l'inversion à NE JAMAIS faire.
    émotion et le même rôle dans la structure que la VO d'origine. Tu adaptes
    la formulation, pas l'intention.
 4. **La VO réécrite tient toujours dans la durée de SON plan** (≈ 2 mots/sec :
-   plan de 3s ≈ 5-6 mots, plan de 4s ≈ 7-8 mots). Jamais plus long que l'original.
+   plan de 4s ≈ 7-8 mots, plan de 8s ≈ 18-20 mots). Jamais plus long que l'original.
 5. Zéro mention de marque/app/lien dans les VO (l'affiliation est ailleurs).
 6. Aucun guillemet double `"` dans le corps du script (utilise `'`).
 

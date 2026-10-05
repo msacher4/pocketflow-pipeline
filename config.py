@@ -111,7 +111,7 @@ SDCPP_TILE_FRAMES = int(os.getenv("PF_SDCPP_TILE_FRAMES", "2"))  # tile temporel
 SDCPP_TIMEOUT = int(os.getenv("PF_SDCPP_TIMEOUT", "1800"))     # secondes, kill si dépassé (~10 min mesuré)
 SDCPP_I2V_WIDTH = int(os.getenv("PF_SDCPP_I2V_WIDTH", "320"))      # i2v : base alignée sur le T2V -> hires latent x2 = 640
 SDCPP_I2V_HEIGHT = int(os.getenv("PF_SDCPP_I2V_HEIGHT", "576"))   # idem T2V -> sortie finale 640x1152 (identique au T2V)
-SDCPP_I2V_FRAMES = int(os.getenv("PF_SDCPP_I2V_FRAMES", "97"))     # 97 @ 24 fps = 4.04 s (validé visuellement ; 49 non testé en 640x1152)
+SDCPP_I2V_FRAMES = int(os.getenv("PF_SDCPP_I2V_FRAMES", "97"))     # 97 @ 24 fps = 4.04 s (validé visuellement ; 49 non testé en 640x1152). IDENTIQUE à SDCPP_FRAMES : I2V et T2V font 4s, la différence est l'image source, pas la durée.
 SDCPP_I2V_STEPS = int(os.getenv("PF_SDCPP_I2V_STEPS", "8"))         # i2v LTX 2.5 : distill = 8 étapes (validé A/B)
 SDCPP_I2V_CFG = float(os.getenv("PF_SDCPP_I2V_CFG", "1.0"))          # i2v LTX 2.5 : CFG 1.0 + guidance distilled 3.5 (validé)
 SDCPP_I2V_GUIDANCE = float(os.getenv("PF_SDCPP_I2V_GUIDANCE", "3.5"))    # guidance distilled (1.5 testé : aucun gain visible)

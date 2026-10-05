@@ -79,8 +79,8 @@ class AltScriptGeneratorNode(AsyncNode):
             ctx += (
                 f"\nRÈGLES D'EXÉCUTION DE LA STRUCTURE :\n"
                 f"- Suis l'ORDRE des beats du tableau ligne par ligne (HOOK → CTA) : tu ne changes pas l'ordre des beats, tu ne les sautes pas.\n"
-                f"- UN beat = UN plan. VO courte : ≈ 2 mots/sec. **MAX 2 vidéos par plan** (I2V≈3s + T2V≈4s = 7s ≈ 18 mots, 2 T2V = 8s ≈ 20 mots). Si la VO dépasse → RACCOURCIS la phrase (jamais de split, jamais plus de 2 lignes Video:).\n"
-                f"- Durée d'un plan = SOMME des durées de SES assets : I2V≈3s, T2V≈4s. Il n'y a que 2 I2V par script : la 1re Video: du Plan 1 et la 1re Video: du Plan 2. Tout le reste est T2V. Réécris le titre du plan (ex: I2V+T2V = 'Plan 1 (0-7s)') et décale les horaires suivants.\n"
+                f"- UN beat = UN plan. VO courte : ≈ 2 mots/sec. **MAX 2 vidéos par plan** (chaque asset ≈ 4s : 1 asset ≈ 12 mots, 2 assets = 8s ≈ 20 mots). Si la VO dépasse → RACCOURCIS la phrase (jamais de split, jamais plus de 2 lignes Video:).\n"
+                f"- Durée d'un plan = SOMME des durées de SES assets : I2V≈4s, T2V≈4s (mêmes frames, même fps LTX-2.5 — la différence est l'image source, PAS la durée). Il n'y a que 2 I2V par script : la 1re Video: de chacun des 2 premiers plans ayant au moins une vidéo (jamais 2 dans le même plan). Tout le reste est T2V. Réécris le titre du plan (ex: 2 assets = 'Plan 1 (0-8s)') et décale les horaires suivants.\n"
                 f"- Avant chaque VO, calcule : ≈ 2 mots/sec. Une VO trop longue se CONDENSE, elle n'ajoute jamais de 3e vidéo.\n"
                 f"- Chaque plan se remplit avec un fait réel de l'article ET le bon perso (nom + jeu/franchise).\n"
                 f"- Les 'Sample VO' existent UNIQUEMENT pour te faire comprendre l'intention émotionnelle : NE LES RECOPIE JAMAIS.\n"

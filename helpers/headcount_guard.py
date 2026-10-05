@@ -17,6 +17,11 @@ HEADCOUNT_QUESTION = {
         "How many distinct people are described as visible in the video prompt?"
     ),
     "criteria": {
+        "no_person": (
+            "NO visible person at all: an object, a place, an empty stage or "
+            "room, a landscape, a lighting setup, a detail in close-up, or a "
+            "crowd seen only from behind / from a distance / out of focus"
+        ),
         "one_person": (
             "Exactly one visible person (she/her, alone, solo, portrait of a single "
             "character reacting to their surroundings)"
@@ -30,6 +35,8 @@ HEADCOUNT_QUESTION = {
         ),
     },
 }
+
+HEADCOUNT_CHOICES = ("no_person", "one_person", "two_people", "crowd")
 
 _HTTP = None
 
@@ -46,8 +53,13 @@ def _client() -> httpx.AsyncClient:
 
 async def classify_headcount(prompt: str) -> dict:
     """Demande à JEV combien de personnes le prompt décrit.
-    Renvoie {'ok': True, 'choice': 'one_person'|'two_people'|'crowd', 'confidence': 0-1}
-    ou {'ok': False, 'reason': ...} — JAMAIS de levée d'exception (le run continue)."""
+    Renvoie {'ok': True, 'choice': 'no_person'|'one_person'|'two_people'|'crowd',
+    'confidence': 0-1} ou {'ok': False, 'reason': ...} — JAMAIS de levée
+    d'exception (le run continue).
+
+    `no_person` existe pour les plans T2V/b-roll : sans elle, un insert de scène
+    vide était forcé dans `one_person` et le validateur ALT exigeait alors
+    'alone' dessus — la règle b-roll et le verrou headcount se marchaient dessus."""
     if not OPENROUTER_API_KEY:
         return {"ok": False, "reason": "no OPENROUTER_API_KEY"}
     try:
@@ -66,7 +78,7 @@ async def classify_headcount(prompt: str) -> dict:
         ans = body.get("answers", {}).get("headcount") or {}
         choice = ans.get("choice")
         confidence = ans.get("confidence")
-        if choice not in ("one_person", "two_people", "crowd"):
+        if choice not in HEADCOUNT_CHOICES:
             log.warning(f"headcount_guard: unexpected answer {ans!r}")
             return {"ok": False, "reason": "unexpected answer"}
         return {
@@ -110,7 +122,9 @@ def apply_headcount_guard(prompt: str, negative: str | None, verdict: dict) -> t
     if choice == "one_person":
         neg = f"{negative}, {anti_people}" if negative else anti_people
         return prompt, neg, {"mode": "fallback", "confidence": conf, "reason": "low confidence"}
-    # two_people / crowd : on ne modifie rien.
+    # two_people / crowd / no_person : on ne modifie rien. no_person en
+    # particulier ne doit JAMAIS recevoir 'alone' ni d'anti-people : c'est le
+    # cas normal d'un insert b-roll (décor vide, objet, mains en détail).
     return prompt, negative, {"mode": choice if choice else "conservative", "confidence": conf}
 
 

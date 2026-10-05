@@ -10,13 +10,11 @@ from pydantic import BaseModel, Field
 from config import LLM_MODEL
 from helpers.state import _set_state, _shared_snapshot, _set_traces
 from helpers.call_llm import call_llm, load_soul, _extract_json, _trace_llm, LLMJSONQuoteError
+from helpers.i2v_slots import I2V_SLOT_COUNT, i2v_slot_positions
 
 log = logging.getLogger("pocketflow-pipeline")
 
 SFX_LIBRARY_FILE = Path(__file__).parent.parent.parent / "VFX" / "sfx_library.json"
-
-# Nombre de slots i2v par script (les 2 premiers visuels). Les autres restent T2V.
-I2V_SLOT_COUNT = 2
 
 SFX_CATEGORY_INTENT = {
     "whooshes": "transition de plan, changement de rythme",
@@ -605,11 +603,19 @@ class AssetPlannerAltNode(AssetPlannerNode):
         slots = decision.get("slots", [])
         visual_slots = [s for s in slots if s.get("type") == "visual"]
         # Il n'y a QUE 2 I2V par script, tous les autres assets sont des T2V.
-        # On marque les 2 PREMIERS slots visuels EXISTANTS, et non « le plan 1 et
-        # le plan 2 » : un script dont le Plan 1 n'a pas de ligne Video: (hook
-        # purement texte) n'a aucun slot pour le plan 1, et la règle par
-        # plan_index n'en marquait qu'un seul -> Klein ne recevait qu'une image.
-        for s in visual_slots[:I2V_SLOT_COUNT]:
+        # On marque la 1re vidéo de chacun des 2 premiers plans qui ont AU MOINS
+        # une vidéo (et PAS les 2 premiers slots visuels : un plan peut avoir 2
+        # vidéos si sa VO est longue, et sa 2e vidéo doit rester un T2V, même
+        # placée ENTRE les deux I2V — cf. helpers.i2v_slots, source de vérité
+        # unique partagée avec le validateur pydantic qui applique la règle b-roll
+        # aux T2V). Un script dont le Plan 1 n'a pas de ligne Video: (hook purely
+        # textual) n'a aucun slot pour le plan 1 : on passe alors au plan 2 et 3.
+        i2v_pos = i2v_slot_positions(
+            [s.get("plan_index") for s in visual_slots], I2V_SLOT_COUNT
+        )
+        for pos, s in enumerate(visual_slots):
+            if pos not in i2v_pos:
+                continue
             s["mode"] = "i2v"
             if character:
                 s["character"] = character

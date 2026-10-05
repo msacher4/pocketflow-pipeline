@@ -1,15 +1,27 @@
 import re
 
 from config import SDCPP_FRAMES, SDCPP_FPS, SDCPP_I2V_FRAMES
+from helpers.i2v_slots import I2V_SLOT_COUNT
 
-FPS = 16.0
-I2V_SEC = int(round(SDCPP_I2V_FRAMES / FPS))   # ≈ 3s (49 frames @16fps)
-# T2V : la durée réelle est frames/fps reels passes a sd-cli (97 @24 = 4.04s),
-# pas frames/16. Utiliser SDCPP_FPS sinon le plan annonce 6s pour un clip de 4s.
+# Les clips sont TOUJOURS générés au même fps réel passé à sd-cli (SDCPP_FPS=24).
+# L'I2V ne fait PAS exception : SDCPP_I2V_FRAMES=97 @ 24fps = 4.04s, donc I2V_SEC
+# == T2V_SEC == 4s. Les deux modes partagent le même build LTX-2.5 (mêmes 97
+# frames, même fps), ils ne diffèrent que par l'image source.
+# NE PAS diviser par un FPS codé en dur ici : c'est exactement l'erreur qui
+# annonçait 6s (97/16) pour un clip de 4s, et qui faisait rejeter au validateur de
+# timing des scripts dont les horaires étaient justes.
+I2V_SEC = int(round(SDCPP_I2V_FRAMES / SDCPP_FPS))   # ≈ 4s (97 frames @24fps)
 T2V_SEC = int(round(SDCPP_FRAMES / SDCPP_FPS))       # ≈ 4s (97 frames @24fps)
 
-# Seulement 2 I2V par script : la 1re Video: du Plan 1 et la 1re Video: du
-# Plan 2. Toutes les autres lignes Video: sont des T2V (4s).
+# FPS Historique (16.0) : un vestige de la période où l'I2V valait 49 frames. Plus
+# utilisé pour le calcul de durée, conservé pour les imports existants.
+FPS = 16.0
+
+# RÈGLE UNIQUE (helpers.i2v_slots) : l'I2V est la 1re vidéo de chacun des
+# I2V_SLOT_COUNT premiers plans qui ont AU MOINS une vidéo. Une 2e vidéo de
+# plan (VO longue au hook) reste donc un T2V, même placée ENTRE les deux I2V.
+# I2V_PLANS ci-dessous n'est plus qu'un REPLI pour les appels sans parse_plans
+# (tests, constructions manuelles de plans) : ne pas s'en servir ailleurs.
 I2V_PLANS = (1, 2)
 
 _PLAN_TITLE_RE = re.compile(
@@ -42,7 +54,8 @@ def _norm_section(raw: str) -> str:
 
 
 def asset_kind(plan_num: int, video_idx_in_plan: int) -> str:
-    """Type d'un asset selon la règle I2V: seule la 1re Video des Plans 1 et 2."""
+    """REPLI historique : I2V pour la 1re vidéo des plans 1 et 2. Utilise
+    `asset_kind_of` dès que le plan vient de `parse_plans` (règle unique)."""
     if video_idx_in_plan == 0 and plan_num in I2V_PLANS:
         return "i2v"
     return "t2v"
@@ -50,6 +63,39 @@ def asset_kind(plan_num: int, video_idx_in_plan: int) -> str:
 
 def asset_duration_secs(plan_num: int, video_idx_in_plan: int) -> int:
     return I2V_SEC if asset_kind(plan_num, video_idx_in_plan) == "i2v" else T2V_SEC
+
+
+def annotate_i2v_assets(plans: list, count: int = I2V_SLOT_COUNT) -> set:
+    """Pose `kind` (i2v/t2v) sur chaque ligne vidéo, via la règle UNIQUE.
+
+    Renvoie l'ensemble des numéros de plans dont la 1re vidéo est un I2V.
+    Appelé par `parse_plans` : tous les consommateurs (durée de plan, budget de
+    mots, repair) lisent alors `v["kind"]` et ne peuvent plus diverger de ce que
+    l'AssetPlanner marque `mode: i2v` ni de ce que le validateur JEV b-roll
+    exempte. Sans cet alignement, un plan dont le Plan 1 n'a pas de vidéo était
+    compté 6s (I2V) par le timing alors que le planner le produisait en T2V (4s).
+    """
+    order = [p["num"] for p in plans if p.get("video_lines")]
+    i2v_plans = set(order[:count])
+    for p in plans:
+        is_i2v_plan = p["num"] in i2v_plans
+        for v in p.get("video_lines") or []:
+            v["kind"] = "i2v" if (is_i2v_plan and v.get("idx") == 0) else "t2v"
+    return i2v_plans
+
+
+def asset_kind_of(plan: dict, video: dict) -> str:
+    """Type d'un asset d'après l'annotation de `parse_plans` (règle unique),
+    avec repli sur l'ancienne règle locale si le plan n'a pas été annoté."""
+    kind = (video or {}).get("kind")
+    if kind in ("i2v", "t2v"):
+        return kind
+    return asset_kind(plan["num"], (video or {}).get("idx", 0))
+
+
+def asset_duration_of(plan: dict, video: dict) -> int:
+    """Durée d'un asset, cohérente avec l'annotation i2v/t2v."""
+    return I2V_SEC if asset_kind_of(plan, video) == "i2v" else T2V_SEC
 
 
 def parse_plans(script: str) -> list[dict]:
@@ -89,6 +135,7 @@ def parse_plans(script: str) -> list[dict]:
         m = _VO_RE.match(raw)
         if m:
             cur["vo_lines"].append({"line": i, "text": m.group(1).strip()})
+    annotate_i2v_assets(plans)
     return plans
 
 
@@ -109,17 +156,17 @@ def parse_section_headers(script: str) -> list[dict]:
 
 
 def plan_required_duration(plan: dict) -> float:
-    """Durée d'un plan = somme des durées de ses assets (I2V≈3s, T2V≈4s)."""
+    """Durée d'un plan = somme des durées de ses assets (I2V≈4s, T2V≈4s)."""
     return sum(
-        asset_duration_secs(plan["num"], v["idx"]) for v in plan["video_lines"]
+        asset_duration_of(plan, v) for v in plan["video_lines"]
     )
 
 
 def plan_budget_words(plan: dict) -> int:
     """Budget de parole d'un plan ≈ 2 mots/sec + filet +4, sur la durée des
-    assets gardés (max 2 vidéos/plan). → 7s (I2V+T2V) ≈ 18 mots, 8s (2 T2V) ≈ 20."""
+    assets gardés (max 2 vidéos/plan). → 8s (2 assets) ≈ 20 mots, 4s (1 asset) ≈ 12."""
     kept = plan["video_lines"][:2]
-    dur = max(sum(asset_duration_secs(plan["num"], v["idx"]) for v in kept), 1.0)
+    dur = max(sum(asset_duration_of(plan, v) for v in kept), 1.0)
     return int(dur * 2) + 4
 
 
@@ -515,7 +562,7 @@ def repair_pacing_script(script: str, max_assets: int = 2) -> str | None:
 
         words = plan_vo_words(p)
         kept = p["video_lines"][:2]
-        kept_dur = sum(asset_duration_secs(p["num"], v["idx"]) for v in kept)
+        kept_dur = sum(asset_duration_of(p, v) for v in kept)
         budget = (2 * max(kept_dur, 1.0)) + 4
         n_assets = len(kept)
         base = kept[0]["text"] if kept else ""

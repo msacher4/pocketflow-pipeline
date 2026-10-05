@@ -6,7 +6,7 @@ script parce qu'une (ou plusieurs) VO dépasse la capacité de son plan.
 ## Règle attendue par le validateur
 
 - Budget de parole d'un plan ≈ **2 mots/sec × durée de SES assets vidéo**.
-  I2V ≈ 3s, T2V ≈ 4s. Donc I2V+T2V = 7s ≈ **18 mots**, 2 T2V = 8s ≈ **20 mots**.
+  I2V ≈ 4s, T2V ≈ 4s. Donc 1 asset = 4s ≈ **12 mots**, 2 assets = 8s ≈ **20 mots**.
 - **MAXIMUM 2 vidéos par plan.** Impossible d'ajouter une 3e vidéo pour faire
   tenir la VO.
 - Une VO trop longue **se RACCOURCIT** : on la RÉÉCRIT en plus court. Tu ne coupes
