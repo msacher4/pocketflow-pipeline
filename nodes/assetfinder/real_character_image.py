@@ -1,9 +1,10 @@
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
-import asyncio
 from pocketflow import AsyncNode
 
 from helpers.state import _set_state, _shared_snapshot, _set_traces, _save_sub_shared
@@ -20,6 +21,22 @@ DOWNLOADS_DIR = Path(__file__).parent.parent.parent / "downloads"
 # quatre montraient le même personnage — Klein partait alors sur deux personnes
 # différentes. Une seule identité, partagée par tous les plans.
 REF_COUNT_TOTAL = 2
+
+
+def _url_key(url: str) -> str:
+    """Identité stable d'une image, insensible aux paramètres d'URL.
+
+    Bing réécrit ses URL à chaque crawl (jetons de cache, `?cb=`, `/revision/latest/`),
+    donc comparer deux chaînes brutes laisse repasser une image déjà rejetée.
+    """
+    try:
+        parts = urlsplit(url or "")
+    except ValueError:
+        return (url or "").strip().lower()
+    host = (parts.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return f"{host}{(parts.path or '').rstrip('/').lower()}"
 
 # Nombre de candidats downloaded avant de donner la main à Telegram. On en
 # garderait bien plus s'il n'y avait pas la validation humaine.
@@ -123,20 +140,31 @@ class RealCharacterImageNode(AsyncNode):
         ferait perdre des images parfaitement bonnes.
         """
         query = build_query(character)
-        log.info(f"RealCharacterImage: recherche icrawler « {query} »")
+
+        # icrawler ne renvoie que ce qu'il télécharge réellement : re-crawler dans
+        # le MÊME dossier ne ressort pas les images déjà là. Au 2e passage (après
+        # un rejet Telegram) le pool était donc vide et le retry ne pouvait plus
+        # rien trouver. Un dossier par tentative garantit un pool réellement neuf.
+        attempt = int(shared.get("_ref_fetch_attempt") or 0)
+        shared["_ref_fetch_attempt"] = attempt + 1
+        cand_dir = dest_dir / "candidates" if attempt == 0 else dest_dir / f"candidates_r{attempt}"
+
+        log.info(f"RealCharacterImage: recherche icrawler « {query} » (tentative {attempt + 1})")
 
         candidates = await asyncio.to_thread(
-            search_character_images, query, str(dest_dir / "candidates"),
+            search_character_images, query, str(cand_dir),
             MAX_CANDIDATES * 2, MAX_CANDIDATES,
         )
         if not candidates:
             log.warning(f"RealCharacterImage: aucun candidat pour « {query} »")
             return [], []
 
-        blacklisted = set(shared.get("_rejected_ref_urls") or [])
+        blacklisted = {_url_key(u) for u in (shared.get("_rejected_ref_urls") or [])}
         if blacklisted:
             before = len(candidates)
-            candidates = [c for c in candidates if c["url"] not in blacklisted]
+            # Normalisation : une même image peut revenir avec une URL différente
+            # (paramètres de cache Bing), donc on compare host+chemin, pas l'URL.
+            candidates = [c for c in candidates if _url_key(c["url"]) not in blacklisted]
             log.info(f"RealCharacterImage: {before - len(candidates)} candidat(s) "
                      f"blacklisté(s) par la validation Telegram")
 
@@ -156,9 +184,12 @@ class RealCharacterImageNode(AsyncNode):
                 "confidence": verdict.get("confidence"),
                 "verdict": verdict.get("verdict") if ok else "erreur",
                 "error": None if ok else verdict.get("reason"),
-                "accepted": ok and verdict.get("verdict") == "accept",
+                "accepted": not ok or verdict.get("verdict") != "reject",
             })
-            if not (ok and verdict.get("verdict") == "accept"):
+            # Seul un rejet EXPLICITE de Jev écarte le candidat. Une panne du modèle
+            # (ok=False) le laisse passer : c'est alors Telegram qui tranche, sinon
+            # un incident Jev ferait perdre des images parfaitement bonnes.
+            if ok and verdict.get("verdict") == "reject":
                 continue
             refs.append({
                 "path": cand["path"],
