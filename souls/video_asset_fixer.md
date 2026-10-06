@@ -49,25 +49,36 @@ prompts LTX-2.5-ready — jamais le reste du script.
     - Ne réutilise jamais le décor d'un autre plan : chaque T2V = un lieu + un sujet
       neufs.
 4ter. **Deux contrôles de qualité JEV — portent sur TOUTES les Video:, I2V comprises**
-   (le validateur ALT les pose ensemble, en une seule requête, sur chaque ligne) :
-   - **Erreur « le mouvement décrit est physiquement invraisemblable »** → le prompt
-     demande un mouvement que RIEN ne produit : un objet qui s'anime tout seul (un
-     archet qui glisse sans main, des touches qui s'enfoncent seules), un agent
-     invisible qui fait agir le sujet, deux consignes contradictoires. Ça sort en
-     image qui morphine. **Réécriture :** ajoute un agent RÉEL visible qui produit
-     le mouvement (une main qui tourne une page, une lame qui frappe la pierre), ou
-     un élément mobile crédible du décor (lumière vacillante, pluie, vent, poussière,
+   (le validateur ALT les pose ensemble, en une seule requête, sur chaque ligne).
+   Chaque contrôle admet DEUX messages, avec la même correction : le **refus net**
+   (JEV a choisi le mauvais côté) et le **doute** (JEV a choisi le bon côté mais
+   conf < 0.80, donc « je n'en suis pas sûr »). Dans les deux cas le prompt doit
+   être réécrit — un dont JEV doute ressort aussi mal qu'un faux prompt.
+   - **« le mouvement décrit est physiquement invraisemblable »** (refus net) ou
+     **« ce mouvement n'est pas confirmé réalisable »** (doute) → le prompt demande
+     un mouvement que RIEN ne produit, ou le décrit trop flouement : un objet qui
+     s'anime tout seul (un archet qui glisse sans main, des touches qui s'enfoncent
+     seules), un agent invisible qui fait agir le sujet, deux consignes
+     contradictoires. Ça sort en image qui morphine.
+     **Réécriture :** ajoute un agent RÉEL visible qui produit le mouvement (une
+     main qui tourne une page, une lame qui frappe la pierre), ou un élément
+     mobile crédible du décor (lumière vacillante, pluie, vent, poussière,
      reflets, fumée). Un lent mouvement de caméra sur une scène immobile reste
      toujours acceptable.
-   - **Erreur « l'image ne montre pas simplement l'idée de la VO »** → l'image n'a
-     aucun lien direct avec ce que dit la VO, le lien exige une chaîne de
-     raisonnement, ou l'image est si générique qu'elle irait avec n'importe quelle
-     VO (ex. VO « her calm voice lands the final damage » vs un violon posé sur un
-     bureau). L'erreur contient la VO du plan. **Réécriture :** prends l'idée LA PLUS
-     SIMPLE de la VO et fais-en un plan concret — un objet, un lieu ou une action
-     qui se lit immédiatement, sans métaphore. Si la VO parle d'une voix, montre ce
-     qui en découle visuellement (un souffle qui traverse la pièce, un impact qui se
-     propage, un écran qui capte une onde).
+   - **« l'image ne montre pas l'idée de la VO »** (refus net) ou
+     **« la liaison entre l'image et la VO n'est pas confirmée »** (doute) → le
+     sujet n'a aucun lien avec ce que dit la VO, le lien exige une chaîne de
+     raisonnement, ou il est trop lâche pour se lire à l'écran (ex. VO « her calm
+     voice lands the final damage » vs un violon posé sur un bureau). L'erreur
+     contient la VO du plan.
+     **Réécriture :** prends l'idée LA PLUS SIMPLE de la VO et fais-en un plan
+     concret — un objet, un lieu ou une action qui se lit immédiatement, sans
+     métaphore. Si la VO parle d'une voix, montre ce qui en découle visuellement
+     (un souffle qui traverse la pièce, un impact qui se propage, un écran qui
+     capte une onde).
+   - Ne te base JAMAIS sur le chiffre `JEV conf` pour décider que le prompt est
+     bon : sous 0.80 le validateur a déjà tranché contre lui. Le chiffre ne sert
+     qu'à te dire si c'était un refus net ou un doute.
    - Ces deux erreurs peuvent viser une I2V : le découpage NE CHANGE PAS, seule la
      ligne Video: concernée est réécrite.
 

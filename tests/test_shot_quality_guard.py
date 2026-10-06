@@ -88,13 +88,19 @@ def test_critere_related_autorise_l_ambiance_pour_une_vo_abstraite():
     assert "not to another one" in crit
 
 
-def test_soul_documente_les_deux_nouvelles_erreurs():
+def test_soul_documente_les_quatre_erreurs():
     """Contrat guard <-> soul : le VideoAssetFixer doit savoir quoi faire des
-    deux messages que le validateur lui envoie, sinon il réécrit au hasard."""
+    messages que le validateur lui envoie. Chaque contrôle a 2 issues (refus
+    net et doute), le soul doit documenter les 4."""
     soul = (PIPELINE_ROOT / "souls" / "video_asset_fixer.md").read_text(
         encoding="utf-8").lower()
-    assert "physiquement invraisemblable" in soul
-    assert "l'image ne montre pas simplement" in soul
+    for phrase in (
+        "physiquement invraisemblable",
+        "n'est pas confirmé réalisable",
+        "l'image ne montre pas l'idée de la vo",
+        "n'est pas confirmée",
+    ):
+        assert phrase in soul, f"le soul doit documenter : {phrase}"
     assert "i2v comprises" in soul, "le soul doit préciser que les I2V sont visées"
 
 
@@ -287,7 +293,7 @@ def test_physique_renvoie_vers_le_fixer():
 def test_vo_obscure_rejette():
     out = asyncio.run(_valider(SCRIPT_BASE, _shot(m_choice="unrelated")))
     assert out["valid"] is False
-    assert "l'image ne montre pas simplement" in out["error"]
+    assert "l'image ne montre pas l'idée de la VO" in out["error"]
     assert is_asset_error(out["error"])
 
 
@@ -296,11 +302,31 @@ def test_vo_obscure_message_rappelle_la_vo():
     assert "VO est" in out["error"], "la VO fautive doit figurer dans le message"
 
 
-def test_seuil_confiance_0_8():
+def test_gate_inverse_physique_doute_bloque():
+    """GATE INVERSÉ : un choix 'plausible' mais hésitant (conf 0.25) bloque —
+    JEV n'y croit pas, le prompt ressortira aussi mal qu'un faux."""
     out = asyncio.run(_valider(
-        SCRIPT_BASE, _shot(p_choice="implausible", p_conf=0.79,
-                           m_choice="unrelated", m_conf=0.79)))
-    assert out["valid"] is True, "sous 0.8 on laisse passer"
+        SCRIPT_BASE, _shot(p_choice="plausible", p_conf=0.25)))
+    assert out["valid"] is False
+    assert "n'est pas confirmé réalisable" in out["error"]
+
+
+def test_gate_inverse_vo_doute_bloque():
+    """Le cas Kafka plan 4 : JEV répond 'related' mais conf 0.19 (< 0.8) → le
+    lien est trop lâche pour autoriser le plan."""
+    out = asyncio.run(_valider(
+        SCRIPT_BASE, _shot(m_choice="related", m_conf=0.19)))
+    assert out["valid"] is False
+    assert "n'est pas confirmée" in out["error"]
+    assert is_asset_error(out["error"])
+
+
+def test_gate_inverse_conf_haute_passe_toujours():
+    """plausible + related à conf >= 0.8 : aucun des deux contrôles ne bloque."""
+    out = asyncio.run(_valider(
+        SCRIPT_BASE, _shot(p_choice="plausible", p_conf=0.88,
+                           m_choice="related", m_conf=0.82)))
+    assert out["valid"] is True, out.get("error")
 
 
 def test_jev_en_panne_ne_bloque_jamais():
@@ -391,6 +417,48 @@ def test_regression_plan5_la_vo_est_bien_lue():
     asyncio.run(_valider(SCRIPT_VIOLON, shot))
     assert any("final damage" in v for v in seen), \
         f"VO jamais transmise, reçues : {seen}"
+
+
+# --------------------------------------------------------------------------
+# Régression : le script Kafka du 07/10 — plans 4 et 6
+# JEV a répondu « related » mais avec conf 0.19 / 0.24, donc en DESSOUS du
+# seuil. Le gate inversé doit les bloquer (« liaison non confirmée »).
+# --------------------------------------------------------------------------
+
+def test_regression_kafka_plan4_vo_doute_bloque():
+    """Plan 4 : « Her calm teasing voice makes you feel owned » illustré par
+    un avant-bras ganté sur une borne d'arcade — JEV 'related' 0.19 → doute."""
+
+    def shot(prompt, vo="", cn="", fr=""):
+        if "néon" in prompt.lower():
+            return {"ok": True,
+                    "physics": {"choice": "plausible", "confidence": 0.96},
+                    "vo_match": {"choice": "related", "confidence": 0.19}}
+        return _shot()(prompt, vo, cn, fr)
+
+    out = asyncio.run(_valider(SCRIPT_BASE, shot))
+    assert out["valid"] is False, out.get("error")
+    assert "ASSET(plan 4)" in out["error"]
+    assert "n'est pas confirmée" in out["error"]
+    assert is_asset_error(out["error"])
+
+
+def test_regression_kafka_plan6_vo_doute_bloque():
+    """Plan 6 : « Evelyn held that spot, but Kafka may steal it » illustré par
+    deux bornes d'arcade — JEV 'related' 0.24 → doute."""
+
+    def shot(prompt, vo="", cn="", fr=""):
+        if "escalier" in prompt.lower():
+            return {"ok": True,
+                    "physics": {"choice": "plausible", "confidence": 1.0},
+                    "vo_match": {"choice": "related", "confidence": 0.24}}
+        return _shot()(prompt, vo, cn, fr)
+
+    out = asyncio.run(_valider(SCRIPT_BASE, shot))
+    assert out["valid"] is False, out.get("error")
+    assert "ASSET(plan 6)" in out["error"]
+    assert "n'est pas confirmée" in out["error"]
+    assert is_asset_error(out["error"])
 
 
 def main():

@@ -479,6 +479,25 @@ def is_timing_error(err: str) -> bool:
 
 _ALONE_TOKENS = (" alone", " alone.", " alone,", "lone", "solo")
 
+# Seuil des 2 contrôles de qualité de plan. GATE INVERSÉ : on ne passe que si
+# JEV est sûr que la réponse est BONNE. Un choix favorable mais hésitant
+# (« related 0.19 ») ne vaut rien — c'est un tirage au sort, et un prompt
+# douteux produit autant de slop qu'un prompt faux.
+_JEV_MIN_CONF = 0.8
+
+# Consignes de réécriture communes aux 2 issues (refus net et doute) : la cause
+# change, la correction non. Documentées en 4ter de souls/video_asset_fixer.md.
+_PHYS_FIX_HINT = (
+    "Réécris la Video: avec un agent réel qui produit le mouvement, ou un "
+    "élément mobile crédible du décor (lumière, pluie, vent, poussière, "
+    "reflets, fumée) — jamais un objet qui s'anime seul."
+)
+_VO_FIX_HINT = (
+    "Réécris la Video: sur l'idée DANS la VO, à sa forme la plus simple : un "
+    "objet, un lieu ou une action qui se lit immédiatement, sans métaphore ni "
+    "chaîne de raisonnement."
+)
+
 
 class PydanticScriptValidationNode(AsyncNode):
     def __init__(self):
@@ -760,7 +779,12 @@ class AltPydanticScriptValidationNode(PydanticScriptValidationNode):
         # autant de perdu qu'un T2V).
         #  (a) physique : le mouvement demandé est-il réalisable, ou le prompt
         #      décrit un objet qui s'anime sans agent visible → morphing/slop ;
-        #  (b) fidélité : l'image montre-t-elle SIMPLEMENT l'idée de la VO.
+        #  (b) fidélité : le sujet est-il lié au thème de la VO.
+        # Chaque contrôle a DEUX issues : le refus net (choix mauvais) et le
+        # doute (choix bon mais conf < _JEV_MIN_CONF). Messages distincts parce
+        # que le VideoAssetFixer n'agit pas pareil sur les deux — lui dire
+        # « invraisemblable » quand JEV a répondu « plausible » le ferait
+        # corriger le mauvais truc.
         # Fail-open : JEV indisponible → skip, jamais de blocage. Violation →
         # préfixe ASSET(plan N) → routage vers le VideoAssetFixer.
         from helpers.shot_quality_guard import (
@@ -775,28 +799,48 @@ class AltPydanticScriptValidationNode(PydanticScriptValidationNode):
                 continue
             phys = verdict.get("physics") or {}
             match = verdict.get("vo_match") or {}
-            p_conf = phys.get("confidence", 0.0)
-            m_conf = match.get("confidence", 0.0)
-            if phys.get("choice") == PHYSICS_BLOCKING and p_conf >= 0.8:
+            p_choice, p_conf = phys.get("choice"), phys.get("confidence", 0.0)
+            m_choice, m_conf = match.get("choice"), match.get("confidence", 0.0)
+            clip = f"« {text[:160]} »."
+
+            if p_choice == PHYSICS_BLOCKING:
                 return {"valid": False, "error": (
                     f"ASSET(plan {plan_idx}): le mouvement décrit est physiquement "
-                    f"invraisemblable (JEV conf {p_conf:.2f}) : « {text[:160]} ». "
+                    f"invraisemblable (JEV conf {p_conf:.2f}) : {clip} "
                     "Un objet ne peut pas se déplacer tout seul sans agent visible "
                     "(pas de main invisible, pas de chose qui s'anime d'elle-même) : "
-                    "ça sort en image qui morphine. Réécris la Video: avec un "
-                    "agent réel qui produit le mouvement, ou un élément mobile "
-                    "crédible du décor (lumière, pluie, vent, poussière, reflets)."
+                    "ça sort en image qui morphine. "
+                    + _PHYS_FIX_HINT
                     + (f" La VO de ce plan est « {vo_ref[:120]} »." if vo_ref else "")
                 )}
-            if match.get("choice") == VO_MATCH_BLOCKING and m_conf >= 0.8:
+            if p_conf < _JEV_MIN_CONF:
                 return {"valid": False, "error": (
-                    f"ASSET(plan {plan_idx}): l'image ne montre pas simplement "
-                    f"l'idée de la VO (JEV conf {m_conf:.2f}) : « {text[:160]} »."
+                    f"ASSET(plan {plan_idx}): ce mouvement n'est pas confirmé "
+                    f"réalisable (JEV conf {p_conf:.2f}, il faut >= "
+                    f"{_JEV_MIN_CONF:.2f}) : {clip} JEV répond "
+                    f"« {p_choice} » mais sans conviction : un prompt dont le "
+                    "mouvement n'est pas net à90 % ressort en image qui morphine. "
+                    + _PHYS_FIX_HINT
+                    + (f" La VO de ce plan est « {vo_ref[:120]} »." if vo_ref else "")
+                )}
+
+            if m_choice == VO_MATCH_BLOCKING:
+                return {"valid": False, "error": (
+                    f"ASSET(plan {plan_idx}): l'image ne montre pas l'idée de la "
+                    f"VO (JEV conf {m_conf:.2f}) : {clip}"
                     + (f" La VO est « {vo_ref[:120]} » : elle porte une autre idée "
                        "que le plan visuel, il faut aucun effort d'interprétation "
                        "pour relier les deux. " if vo_ref else "")
-                    + "Réécris la Video: sur l'idée DANS la VO, à sa forme la plus "
-                       "simple : un objet, un lieu ou une action qui se lit "
-                       "immédiatement sans métaphore ni chaîne de raisonnement."
+                    + _VO_FIX_HINT
+                )}
+            if m_conf < _JEV_MIN_CONF:
+                return {"valid": False, "error": (
+                    f"ASSET(plan {plan_idx}): la liaison entre l'image et la VO "
+                    f"n'est pas confirmée (JEV conf {m_conf:.2f}, il faut >= "
+                    f"{_JEV_MIN_CONF:.2f}) : {clip} JEV répond "
+                    f"« {m_choice} » mais sans conviction : le lien est trop "
+                    "lâche pour se lire à l'écran en un coup d'œil."
+                    + (f" La VO est « {vo_ref[:120]} ». " if vo_ref else "")
+                    + _VO_FIX_HINT
                 )}
         return {"valid": True}
