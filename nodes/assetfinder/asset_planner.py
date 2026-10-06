@@ -328,8 +328,6 @@ class AssetPlannerNode(AsyncNode):
                 "prompt",
                 f"{content}, cinematic, dynamic camera movement, 9:16 portrait"
                 if content else "cinematic dynamic shot, 9:16 portrait")
-            out.setdefault("negative_prompt",
-                           "blurry, low quality, text, watermark, deformed")
             out.setdefault("expected", content[:200])
         elif kind == "audio":
             out.setdefault("mood", "upbeat anime battle theme")
@@ -531,10 +529,6 @@ class AssetPlannerAltNode(AssetPlannerNode):
             content = (s.get("content") or "").strip()
             s["prompt"] = _clean(content)
             s["expected"] = (content or "")[:600]
-            s["negative_prompt"] = (
-                "blurry, low quality, text, watermark, deformed, "
-                "indoor apartment, selfie, casual home video, static room"
-            )
 
         for a in audio:
             content = (a.get("content") or "").strip()
