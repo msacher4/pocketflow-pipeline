@@ -243,7 +243,7 @@ def _asyncify(fn):
     return wrapper
 
 
-async def _valider(script, broll, headcount=None):
+async def _valider(script, broll, headcount=None, shot=None):
     shared = {
         "script": script,
         "selected_article": {"character": {"name": "Lilly",
@@ -252,11 +252,19 @@ async def _valider(script, broll, headcount=None):
         "format": "markdown",
     }
     hc = headcount or (lambda p: {"ok": True, "choice": "no_person", "confidence": 0.9})
+    sh = shot or _shot_all_ok
     node = AltPydanticScriptValidationNode()
     prep = await node.prep_async(shared)
     with patch("helpers.headcount_guard.classify_headcount", new=_asyncify(hc)), \
-         patch("helpers.broll_guard.classify_broll", new=_asyncify(broll)):
+         patch("helpers.broll_guard.classify_broll", new=_asyncify(broll)), \
+         patch("helpers.shot_quality_guard.classify_shot", new=_asyncify(sh)):
         return await node.exec_async(shared)
+
+
+def _shot_all_ok(prompt, vo="", cn="", fr=""):
+    return {"ok": True,
+            "physics": {"choice": "plausible", "confidence": 0.95},
+            "vo_match": {"choice": "related", "confidence": 0.95}}
 
 
 def _broll_all_ok(prompt, vo="", cn="", fr=""):

@@ -46,8 +46,30 @@ prompts LTX-2.5-ready — jamais le reste du script.
      « without the character » : la ligne décrit un sujet différent, et ce sujet
      est l'illustration de la VO. **Le plan est en T2V même s'il est la 2e vidéo
      d'un plan dont la 1re est I2V**, et même s'il est le CTA.
-   - Ne réutilise jamais le décor d'un autre plan : chaque T2V = un lieu + un sujet
-     neufs.
+    - Ne réutilise jamais le décor d'un autre plan : chaque T2V = un lieu + un sujet
+      neufs.
+4ter. **Deux contrôles de qualité JEV — portent sur TOUTES les Video:, I2V comprises**
+   (le validateur ALT les pose ensemble, en une seule requête, sur chaque ligne) :
+   - **Erreur « le mouvement décrit est physiquement invraisemblable »** → le prompt
+     demande un mouvement que RIEN ne produit : un objet qui s'anime tout seul (un
+     archet qui glisse sans main, des touches qui s'enfoncent seules), un agent
+     invisible qui fait agir le sujet, deux consignes contradictoires. Ça sort en
+     image qui morphine. **Réécriture :** ajoute un agent RÉEL visible qui produit
+     le mouvement (une main qui tourne une page, une lame qui frappe la pierre), ou
+     un élément mobile crédible du décor (lumière vacillante, pluie, vent, poussière,
+     reflets, fumée). Un lent mouvement de caméra sur une scène immobile reste
+     toujours acceptable.
+   - **Erreur « l'image ne montre pas simplement l'idée de la VO »** → l'image n'a
+     aucun lien direct avec ce que dit la VO, le lien exige une chaîne de
+     raisonnement, ou l'image est si générique qu'elle irait avec n'importe quelle
+     VO (ex. VO « her calm voice lands the final damage » vs un violon posé sur un
+     bureau). L'erreur contient la VO du plan. **Réécriture :** prends l'idée LA PLUS
+     SIMPLE de la VO et fais-en un plan concret — un objet, un lieu ou une action
+     qui se lit immédiatement, sans métaphore. Si la VO parle d'une voix, montre ce
+     qui en découle visuellement (un souffle qui traverse la pièce, un impact qui se
+     propage, un écran qui capte une onde).
+   - Ces deux erreurs peuvent viser une I2V : le découpage NE CHANGE PAS, seule la
+     ligne Video: concernée est réécrite.
 
 # Format de sortie
 Renvoie UNIQUEMENT ce JSON valide, sans texte avant ni après :

@@ -754,4 +754,49 @@ class AltPydanticScriptValidationNode(PydanticScriptValidationNode):
                        "Réécris la Video: comme un plan d'insert (décor, objet, mains "
                        "en détail, scène vide, foule de dos, environnement).")
                 )}
+
+        # JEV qualité du plan — deux questions en UNE requête, sur TOUTES les
+        # vidéos (I2V comprises : un ancrage qui ne porte pas l'idée de la VO est
+        # autant de perdu qu'un T2V).
+        #  (a) physique : le mouvement demandé est-il réalisable, ou le prompt
+        #      décrit un objet qui s'anime sans agent visible → morphing/slop ;
+        #  (b) fidélité : l'image montre-t-elle SIMPLEMENT l'idée de la VO.
+        # Fail-open : JEV indisponible → skip, jamais de blocage. Violation →
+        # préfixe ASSET(plan N) → routage vers le VideoAssetFixer.
+        from helpers.shot_quality_guard import (
+            PHYSICS_BLOCKING, VO_MATCH_BLOCKING, classify_shot,
+        )
+        for plan_idx, text in shots:
+            vo_ref = (vo_by_plan.get(plan_idx, "") or "").strip()
+            verdict = await classify_shot(text, vo_ref, name, franchise)
+            if not verdict.get("ok"):
+                log.info(f"AltPydantic JEV shot -> JEV indisponible pour Video plan "
+                         f"{plan_idx}, skip")
+                continue
+            phys = verdict.get("physics") or {}
+            match = verdict.get("vo_match") or {}
+            p_conf = phys.get("confidence", 0.0)
+            m_conf = match.get("confidence", 0.0)
+            if phys.get("choice") == PHYSICS_BLOCKING and p_conf >= 0.8:
+                return {"valid": False, "error": (
+                    f"ASSET(plan {plan_idx}): le mouvement décrit est physiquement "
+                    f"invraisemblable (JEV conf {p_conf:.2f}) : « {text[:160]} ». "
+                    "Un objet ne peut pas se déplacer tout seul sans agent visible "
+                    "(pas de main invisible, pas de chose qui s'anime d'elle-même) : "
+                    "ça sort en image qui morphine. Réécris la Video: avec un "
+                    "agent réel qui produit le mouvement, ou un élément mobile "
+                    "crédible du décor (lumière, pluie, vent, poussière, reflets)."
+                    + (f" La VO de ce plan est « {vo_ref[:120]} »." if vo_ref else "")
+                )}
+            if match.get("choice") == VO_MATCH_BLOCKING and m_conf >= 0.8:
+                return {"valid": False, "error": (
+                    f"ASSET(plan {plan_idx}): l'image ne montre pas simplement "
+                    f"l'idée de la VO (JEV conf {m_conf:.2f}) : « {text[:160]} »."
+                    + (f" La VO est « {vo_ref[:120]} » : elle porte une autre idée "
+                       "que le plan visuel, il faut aucun effort d'interprétation "
+                       "pour relier les deux. " if vo_ref else "")
+                    + "Réécris la Video: sur l'idée DANS la VO, à sa forme la plus "
+                       "simple : un objet, un lieu ou une action qui se lit "
+                       "immédiatement sans métaphore ni chaîne de raisonnement."
+                )}
         return {"valid": True}
