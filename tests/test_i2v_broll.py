@@ -14,6 +14,7 @@ from unittest.mock import patch
 PIPELINE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PIPELINE_ROOT))
 
+from helpers.broll_guard import FACIAL_FEATURE_RE, is_facial, is_true_broll
 from helpers.i2v_slots import I2V_SLOT_COUNT, i2v_slot_positions
 from nodes.assetfinder.asset_planner import AssetPlannerAltNode
 from nodes.scriptwriter.script_timing import (
@@ -23,6 +24,8 @@ from nodes.scriptwriter.script_timing import (
     asset_kind_of,
     parse_plans,
     plan_required_duration,
+    repair_pacing_script,
+    to_broll_variant,
 )
 from nodes.scriptwriter.pydantic_validation import (
     AltPydanticScriptValidationNode,
@@ -389,6 +392,135 @@ def test_headcount_no_person_ne_recoit_jamais_alone():
         {"ok": True, "choice": "no_person", "confidence": 0.95})
     assert "alone" not in prompt.lower()
     assert meta["mode"] == "no_person"
+
+
+# --------------------------------------------------------------------------
+# 2e asset : le filet de réparation doit produire un VRAI b-roll distinct
+#
+# Régession : le run 20261005_195636 avait 5 plans sur 7 où le 2e asset était
+# une copie littérale suffixée "— alternate camera angle 1" (~6 min de GPU
+# gaspillées par copie) — et, sur le Plan 1, une copie d'un plan Saber Alter
+# devenue un T2V interdit.
+# --------------------------------------------------------------------------
+
+_SABER_BASE = (
+    "Saber Alter in her black armored dress with silver hair and glowing red "
+    "eyes, in a dark ruined castle hall lit by cold blue moonlight, raising "
+    "her blackened sword and slamming it into the stone floor, red corruption "
+    "mist curling around her, slow push-in on her defiant face, echoing wind, "
+    "then a burst of crimson particles"
+)
+_V19_VO = (
+    "If Saber Alter just became your waifu in Fate/EXTRA Record, I have bad "
+    "news. You're a hopeless case."
+)
+
+
+def _repair_with_one_video(base: str, vo: str) -> list[str]:
+    """Plan dont la VO (19 mots > budget 12) force l'ajout d'un 2e asset."""
+    import re
+    out = repair_pacing_script(f"Plan 1 (0-4s)\nVideo: {base}\nVO: {vo}\n")
+    assert out, "le filet doit réparer ce plan"
+    return [v.strip() for v in re.findall(r"^\s*Video\s*:\s*(.*)$", out, re.M)]
+
+
+def test_repair_plus_jamais_de_duplicate_alternate_camera():
+    """L'ancien fallback copiait `base` mot pour mot : plus jamais."""
+    for base, vo in (
+        (_SABER_BASE, _V19_VO),
+        ("A dark arena, rows of empty seats, slow tilt upward",
+         "The remake even brings new story routes and reimagined battles. "
+         "That voice taunting you there? Sealed since day one."),
+    ):
+        vids = _repair_with_one_video(base, vo)
+        assert len(vids) == 2, "la VO longue doit recevoir un 2e asset"
+        assert vids[0] != vids[1], "le 2e asset ne doit JAMAIS être une copie"
+        assert "alternate camera angle" not in vids[1]
+
+
+def test_variant_plan_personnage_debarrasse_du_personnage():
+    """Plan 1 : le 2e asset doit garder la scène, laisser tomber Saber Alter."""
+    variant = to_broll_variant(_SABER_BASE, 1)
+    assert variant
+    assert "Saber" not in variant, "le T2V ne doit pas recruter le perso"
+    assert not is_facial(variant), "aucun détail de visage sur un T2V"
+    assert is_true_broll(variant)
+
+
+def test_variant_conserve_le_decor_de_la_scene():
+    """On ne change pas de décor : le b-roll reste dans le plan concerné."""
+    variant = to_broll_variant(_SABER_BASE, 1)
+    assert "dark ruined castle hall" in variant, "le décor doit survivre"
+    assert "crimson particles" in variant, "l'ambiance doit survivre"
+
+
+def test_variant_mains_autorisees_visage_interdit():
+    """Frontière Marc : mains OK, yeux/visage non — y compris en reflet."""
+    hands = ("Close-up of a hand flipping through a worn Fate visual novel "
+             "collector's box on a cluttered desk, warm desk lamp light, "
+             "fingers stopping on a page, slow zoom in, pages rustling softly")
+    variant = to_broll_variant(hands, 1)
+    assert variant and "hand" in variant, "les mains restent autorisées"
+    assert not is_facial(variant)
+    # interdits
+    assert is_facial("close-up on her iris and eyelid")
+    assert is_facial("her face reflecting in the screen")
+    # pas un visage
+    assert not is_facial("a smartphone lying face-up")
+    assert not is_facial("a phone lying face down")
+
+
+def test_variant_deux_ajouts_successifs_distincts():
+    """Ajouter 2e puis 3e asset ne doit pas donner deux fois la même ligne."""
+    base = "A dark arena, rows of empty seats, slow tilt upward"
+    assert to_broll_variant(base, 1) != to_broll_variant(base, 2)
+
+
+def test_variant_personnage_sans_decor_bascule_sur_insert_neutre():
+    """base 100 % personnage, pas un mot de décor : on ne peut pas en tirer un
+    b-roll fidèle à la scène. On retombe sur un insert d'ambiance NEUTRE plutôt
+    que de couper la VO — `repair_pacing_script` promet de ne jamais raccourcir
+    un texte pour compenser un ajout, et l'insert passe le contrôle JEV."""
+    variant = to_broll_variant("Saber Alter raising her blackened sword", 1)
+    assert variant, "jamais None : un plan a toujours un 2e asset possible"
+    assert is_true_broll(variant)
+    assert "Saber" not in variant
+
+
+def test_variant_un_plan_sans_video_recoit_quand_meme_un_asset():
+    """Un plan doit avoir >= 1 vidéo : insert générique, jamais 0 asset."""
+    gen = to_broll_variant("", 1)
+    assert gen and is_true_broll(gen)
+
+
+def test_repair_rend_none_sur_script_deja_propre():
+    """Contrat « rien à réparer ». Régressé au passage : `splitlines()`
+    mangeait le \\n final, `retimed != script` était toujours vrai et le
+    filet ne rendait JAMAIS None."""
+    clean = ("Plan 1 (0-4s)\nVideo: A dark arena, rows of empty seats, "
+             "slow tilt upward.\nVO: Short line here.\n")
+    assert repair_pacing_script(clean) is None
+
+
+def test_repair_rend_none_sur_les_fixtures_du_run():
+    """Les fixtures AssetFinder (7 plans, 48s) doivent être un point fixe."""
+    from pathlib import Path
+    fixture = (Path(__file__).resolve().parent / "Test assetfoinder alt"
+               / "script").read_text(encoding="utf-8")
+    assert repair_pacing_script(fixture) is None
+
+
+def test_parite_regex_facial_et_criteres_jev():
+    """FACIAL_FEATURE_RE doit couvrir les termes littéraux de BROLL_QUESTION,
+    sans jamais faire basculer les mains de « acceptable » à interdit."""
+    from helpers.broll_guard import BROLL_QUESTION
+    cv = BROLL_QUESTION["criteria"]["character_visible"]
+    br = BROLL_QUESTION["criteria"]["b_roll"]
+    for terme in ("iris", "eyelid", "brow", "jaw"):
+        assert terme in cv.lower(), f"le critère JEV doit citer {terme}"
+        assert FACIAL_FEATURE_RE.search(terme), f"FACIAL_FEATURE_RE manque {terme}"
+    assert "hands and gear are acceptable" in br.lower(), \
+        "la frontière main-autorisée doit rester dans le critère JEV"
 
 
 def main():

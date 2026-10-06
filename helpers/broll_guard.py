@@ -1,4 +1,5 @@
 import logging
+import re
 
 log = logging.getLogger("pocketflow-pipeline")
 
@@ -25,6 +26,65 @@ BROLL_QUESTION = {
         ),
     },
 }
+
+# ---------------------------------------------------------------------------
+# Filet déterministe (zéro LLM)
+#
+# `BROLL_QUESTION` ci-dessus demande à JEV si une ligne T2V est un vrai
+# b-roll. Le filtre ci-dessous fait le même tri sur le TEXTE, sans appel
+# réseau : c'est ce dont `repair_pacing_script` a besoin, car ce filet
+# s'exécute quand le LLM a déjà produit un script et qu'on ne veut pas
+# repayer un appel modèle pour ajouter une 2e vidéo.
+#
+# Les deux doivent rester alignés : `FACIAL_FEATURE_RE` reprend à l'identique
+# les termes cités par `criteria["character_visible"]` et refusés par
+# `criteria["b_roll"]` (œil, iris, paupière, sourcil, machoire, reflet du
+# visage). `tests/test_i2v_broll.py` verrouille la parité.
+# ---------------------------------------------------------------------------
+
+# Visages découvrables sans LLM : parties de visage en détail, expressions et
+# le mot « face » lui-même. Ne contient PAS « reflection » en clair : un reflet
+# d'objet (néon sur un liquide) est un vrai b-roll, c'est le REFLET DU VISAGE
+# qui est interdit — et il est déjà couvert ici (« her face » tombe aussi sous
+# le filtre personne, cf. `character_present`).
+FACIAL_FEATURE_RE = re.compile(
+    r"\b(?:"
+    # `face` exclut `face-up` / `face down` : ce sont des ORIENTATIONS
+    # d'objet (« a smartphone lying face-up »), pas un visage. Les laisser
+    # tomber supprimait le sujet du plan CTA tout entier.
+    r"face(?![- ]?(?:up|down))|eye|eyes|iris|eyelid|eyelids|eyelash|eyelashes|"
+    r"brow|brows|eyebrow|eyebrows|jaw|cheek|cheeks|lip|lips|"
+    r"mouth|nose|forehead|gaze|smile|smiling|grin|frown|"
+    r"expression|glare|stare|staring"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_facial(video_text: str) -> bool:
+    """True si la ligne traite d'une part de visage ou d'une expression.
+
+    Contrat partagé avec le critère JEV : mains et objets acceptés, jamais une
+    feature faciale."""
+    return bool(FACIAL_FEATURE_RE.search(video_text or ""))
+
+
+def is_true_broll(video_text: str) -> bool:
+    """True si la ligne est un VRAI b-roll : ni personnage, ni détail de visage.
+
+    Version déterministe du critère `b_roll` de `BROLL_QUESTION`. Utilisée par
+    `to_broll_variant` (script_timing) pour garantir que le filet de
+    réparation ne produit jamais un T2V interdit, et par les tests pour
+    verrouiller la frontière main-autorisée / visage-interdit.
+    """
+    # Import local : script_timing importe ce module au niveau module, un
+    # import réciproque ici au niveau module formerait un cycle.
+    from nodes.scriptwriter.script_timing import character_present
+
+    text = video_text or ""
+    if is_facial(text):
+        return False
+    return not character_present(text)
 
 
 async def classify_broll(prompt: str, voice_over: str = "",

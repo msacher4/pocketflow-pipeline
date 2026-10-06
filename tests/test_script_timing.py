@@ -337,22 +337,18 @@ def test_parse_plans_indices_video():
 
 
 if __name__ == "__main__":
-    test_regle_i2v_2_assets_seulement()
-    test_i2v_et_t2v_font_la_meme_duree()
-    test_plan_requis_8s_pour_2_assets()
-    test_pacing_ok_8s()
-    test_vo_trop_longue_detectee()
-    test_horaires_incoherents_detectes()
-    test_budget_parole_grandit_avec_assets()
-    test_budget_parole_sature_a_2_assets()
-    test_plan_plus_de_2_videos_erreur()
-    test_rewrite_timestamps_sequential()
-    test_repair_pacing_ajoute_2e_asset_sans_couper()
-    test_repair_retime_segments_contigus()
-    test_repair_impossible_depasse_cap_2_assets()
-    test_repair_retire_3e_video()
-    test_vo_18_mots_ok_sur_2_assets()
-    test_vo_21_mots_rejetee_cap_global()
-    test_plan_trois_videos_rejete()
-    test_parse_plans_indices_video()
-    print("test_script_timing PASSED")
+    # Collecte dynamique : la liste en dur ci-avant appelait
+    # `test_repair_impossible_depasse_cap_2_assets()` — nom disparu quand le
+    # test a été renommé en `..._raccourcit_vo_au_budget_2_assets` — et, pire,
+    # n'exécutait jamais les 2 tests renommés. Toute fonction `test_*`
+    # déclarée est désormais lancée, sans risque d'oubli à l'ajout.
+    from types import FunctionType
+
+    tests = [
+        (name, obj) for name, obj in sorted(globals().items())
+        if name.startswith("test_") and isinstance(obj, FunctionType)
+    ]
+    for _name, _fn in tests:
+        _fn()
+        print(f"PASSED {_name}")
+    print(f"test_script_timing PASSED ({len(tests)} tests)")

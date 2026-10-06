@@ -1,6 +1,7 @@
 import re
 
 from config import SDCPP_FRAMES, SDCPP_FPS, SDCPP_I2V_FRAMES
+from helpers.broll_guard import is_true_broll
 from helpers.i2v_slots import I2V_SLOT_COUNT
 
 # Les clips sont TOUJOURS générés au même fps réel passé à sd-cli (SDCPP_FPS=24).
@@ -536,7 +537,113 @@ def rewrite_plan_timestamps(script: str) -> str:
         e = max(p["_end"] for p in span)
         repl[h["line"]] = _fmt_section_header(lines[h["line"]], s, e)
 
-    return "\n".join(repl.get(i, l) for i, l in enumerate(lines))
+    out = "\n".join(repl.get(i, l) for i, l in enumerate(lines))
+    # `splitlines()` mange le \n final : sans restitution, `retimed != script`
+    # reste vrai pour TOUT script bien formé, `repair_pacing_script` ne rend
+    # jamais None, et son contrat « rien à réparer » est mort.
+    return out + "\n" if (script or "").endswith("\n") else out
+
+
+# ---------------------------------------------------------------------------
+# 2e asset : un VRAI b-roll de la scène, jamais une copie de la 1re vidéo
+#
+# Le filet de réparation ajoute une 2e vidéo quand la VO dépasse le budget
+# d'un seul asset. L'implémentation précédente copiait `base` et suffixait
+# "— alternate camera angle N" : cela multipliait la vidéo à l'identique
+# (~6 min de GPU gaspillées par asset) et, quand `base` décrivait le
+# personnage, produisait un T2V qui viole la règle b-roll — le validateur
+# JEV le rejetait donc, et le run perdait un cycle de réparation pour retomber
+# sur la même copie.
+#
+# Ici on fait les deux choses exigées : DISTINCT (un autre cadrage) et
+# TRUE B-ROLL (ni personnage, ni détail de visage — cf. helpers.broll_guard).
+# ---------------------------------------------------------------------------
+
+# Mouvements de caméra interchangeables. Ordre stable pour que le N-ième ajout
+# soit reproductible, et choisie en évitant celle déjà présente dans `base`
+# afin que le nouveau plan diffère réellement.
+_BROLL_CAMERAS = (
+    "slow push-in",
+    "slow dolly-in",
+    "slow pan across",
+    "slow tilt upward",
+    "slow tracking shot",
+    "slow zoom in",
+    "slow orbit around",
+    "low-angle slow rise",
+    "slow crane down",
+)
+
+# Une seule coupure : virgules, points-virgules, points et tirets longs — les
+# prompts vidéo sont des listes d'adjectifs, pas de la prose à phrases.
+_CLAUSE_SPLIT_RE = re.compile(r"\s*(?:[,;.]|—)\s*")
+
+# Mouvement caméra repérable pour substitution en place (close-up/wide shot en
+# sont VOLONTAIREMENT absents : ce sont des cadrages, pas des mouvements, et
+# les substituer casserait la grammaire "Close-up of ...").
+_CAMERA_MOVE_RE = re.compile(
+    r"\b(?:slow|slowly|quick|rapid|gentle|soft)?\s*"
+    r"(?:push-?in|dolly(?:-?in|-?out)?|pan across|panning|"
+    r"tilt(?:\s+upward|\s+up|\s+down)?|tracking shot|"
+    r"zoom(?:\s+in|\s+out)?|orbit(?:ing)?(?:\s+around)?|"
+    r"crane(?:\s+up|\s+down)?|pull-?back)\b",
+    re.IGNORECASE,
+)
+
+# Insert sans scène identifiable : n'existe que pour un plan qui n'a AUCUNE
+# vidéo (impossible de faire mieux qu'une ambiance, mais il faut >= 1 asset).
+_GENERIC_BROLL = (
+    "Atmospheric insert of the scene, dust drifting in a shaft of light, "
+    "empty foreground, slow push-in"
+)
+
+
+def _strip_person_clauses(text: str) -> str:
+    """Retire les propositions qui montrent un personnage ou un visage.
+
+    Garde donc le décor, les objets, les mains et l'ambiance — exactement ce
+    que le critère `b_roll` de helpers.broll_guard accepte."""
+    clauses = [c.strip() for c in _CLAUSE_SPLIT_RE.split(text or "") if c and c.strip()]
+    return ", ".join(c for c in clauses if is_true_broll(c))
+
+
+def to_broll_variant(base: str, index: int = 1) -> str | None:
+    """Construit le `index`-ième b-roll d'un plan, distinct de `base`.
+
+    Retourne :
+    - un nouveau prompt de T2V sans personnage ni détail de visage, avec un
+      autre cadrage que `base` ;
+    - le prompt générique si `base` est vide ou 100 % personnage : un plan doit
+      avoir >= 1 vidéo, et `repair_pacing_script` fait le serment de ne JAMAIS
+      raccourcir une VO au profit d'un ajout (test
+      `test_repair_pacing_ajoute_2e_asset_sans_couper`). Mieux vaut un insert
+      d'ambiance non spécifique — qui ne contredit aucun plan et passe le
+      contrôle JEV — que de perdre des mots du texte. Jamais `None`.
+    """
+    base = (base or "").strip()
+    if not base:
+        return _GENERIC_BROLL
+
+    # base 100 % personnage et sans le moindre décor → impossible d'en sortir
+    # un b-roll fidèle à cette scène : on retombe sur l'insert d'ambiance
+    # plutôt que de dupliquer la 1re vidéo.
+    body = _strip_person_clauses(base) or _GENERIC_BROLL
+
+    low = body.lower()
+    for offset in range(len(_BROLL_CAMERAS)):
+        camera = _BROLL_CAMERAS[(index - 1 + offset) % len(_BROLL_CAMERAS)]
+        if camera not in low:
+            break
+    else:
+        camera = _BROLL_CAMERAS[(index - 1) % len(_BROLL_CAMERAS)]
+
+    variant = _CAMERA_MOVE_RE.sub(camera, body, count=1)
+    if variant.lower() == base.lower() or variant.lower() == body.lower():
+        variant = f"{body}, {camera}" if not _CAMERA_MOVE_RE.search(body) else variant
+    if variant.lower() == base.lower():
+        # Dernier filet : on garantit que le 2e asset n'est jamais une copie.
+        variant = f"Detail insert, {variant}"
+    return variant
 
 
 def repair_pacing_script(script: str, max_assets: int = 2) -> str | None:
@@ -570,12 +677,9 @@ def repair_pacing_script(script: str, max_assets: int = 2) -> str | None:
         while words > budget and n_assets < max_assets:
             n_assets += 1
             attempts += 1
-            variant = (
-                f"{base} — alternate camera angle {attempts}" if base
-                else f"Alternate camera angle {attempts}, dynamic cinematic action"
-            )
             anchor = kept[-1]["line"] if kept else p["title_line"]
-            additions.append((anchor, f"Video: {variant}"))
+            additions.append(
+                (anchor, f"Video: {to_broll_variant(base, attempts)}"))
             budget = (2 * (kept_dur + attempts * T2V_SEC)) + 4
         if words > budget:
             # La VO dépasse même le budget 2-assets : la raccourcir au budget
@@ -598,7 +702,7 @@ def repair_pacing_script(script: str, max_assets: int = 2) -> str | None:
         # Aucun ajout/raccourcissement nécessaire, mais les horaires déclarés
         # peuvent quand même être incohérents avec la somme des assets (cas le
         # plus fréquent du run 28/09 : VO dans le budget, 1 asset, plage fausse
-        # type `Plan 1 (0-8s)` pour 3s réelles). Le retiming seul suffit alors.
+        # type `Plan 1 (0-8s)` pour 4s réelles). Le retiming seul suffit alors.
         retimed = rewrite_plan_timestamps(script)
         if retimed != script:
             return retimed
@@ -632,4 +736,6 @@ def repair_pacing_script(script: str, max_assets: int = 2) -> str | None:
             new_lines.insert(anchor + 1, t)
 
     retimed = "\n".join(new_lines)
+    if (script or "").endswith("\n"):
+        retimed += "\n"
     return rewrite_plan_timestamps(retimed)
