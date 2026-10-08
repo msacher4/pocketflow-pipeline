@@ -143,7 +143,7 @@ def test_cablage_title_gate():
     assert "validate_af_news" in approve_gate[0][2], approve_gate
     nofeed_gate = [(s, a, t) for s, a, t in edges
                    if s == "TitleCharacterGateNode" and a == "no_good_news"]
-    assert nofeed_gate and nofeed_gate[0][2] == "RandomFeedNode", nofeed_gate
+    assert nofeed_gate and nofeed_gate[0][2] == "LLMSelectNode", nofeed_gate
     log.info("PASSED")
 
 

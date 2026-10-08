@@ -58,11 +58,8 @@ RSS_FEEDS = [
 ]
 
 # Sous-ensemble des feeds les plus ciblés "personnage féminin" (waifu).
-# RandomFeedNode tire d'abord dans cette liste (choix aléatoire), et ne se
-# rabat sur les feeds génériques que quand tous les prioritaires ont été tentés.
-# Motivé par le run 2026-09-07 : le tirage aléatoire pur avait sorti 5 feeds
-# génériques de suite ("game trailer", "new anime game", "video game character")
-# => aucun personnage féminin identifiable => soul bloquant => abort MAX_RETRIES.
+# Historiquement RandomFeedNode les tirait EN PRIORITÉ ; désormais ALL_FEEDS
+# (RSS_FEEDS + WAFU_PRIORITY_FEEDS, dédupés par URL) est mergé en un seul pool.
 WAFU_PRIORITY_FEEDS = [
     "https://news.google.com/rss/search?q=anime%20character%20when:24h",
     "https://news.google.com/rss/search?q=female%20character%20when:24h",
@@ -72,3 +69,70 @@ WAFU_PRIORITY_FEEDS = [
     "https://news.google.com/rss/search?q=honkai%20when:24h",
     "https://news.google.com/rss/search?q=anime%20girl%20when:24h",
 ]
+
+ALL_FEEDS = RSS_FEEDS + [f for f in WAFU_PRIORITY_FEEDS if f not in RSS_FEEDS]
+
+# ========================== Decider 4B (scoreur rapide in-process) ==========================
+# Modèle de décision typé ("System One") : lit les logits à des positions précises
+# via libllama.so (HIP, build local) — PAS de llama-server. Éligibilité + tri
+# grossier du pool avant le LLM final (qwen-opus + soul, contrat inchangé).
+DECIDER_GGUF = "/media/marcs/Linux_Apps/LLM/decider-4b/decider-4b-v2.1-Q4_K_M.gguf"
+DECIDER_N_CTX = 8192
+DECIDER_N_GPU_LAYERS = -1
+DECIDER_MAX_CTX_TOKENS = 1536
+
+# Pool unique mergé (tous les feeds), filtré, puis cap avant scoring.
+POOL_MAX_ARTICLES = 300
+# Nombre de candidats les mieux notés transmis au LLM final.
+DECIDER_TOP_K = 15
+
+# Rubrique de scoring (EN, exigée par le modèle). Les libellés de Q2 sont la
+# seule source de vérité pour la catégorie → DOIVENT matcher les clés de
+# DECIDER_CATEGORY_RANK.
+DECIDER_QUESTIONS = [
+    {
+        "question": "Is the main subject of this headline a named female fictional character (from a video game, anime, TV series, movie or book)?",
+        "options": ["yes", "no"],
+    },
+    {
+        "question": "Which category does this news belong to?",
+        "options": [
+            "new female character reveal from a game or anime",
+            "trailer or update revealing a detail about an existing female character",
+            "controversy or popularity spike of a specific female character",
+            "new skin or outfit for an existing female character",
+            "male character or cast roster news",
+            "game or service news without any character",
+            "anime release date or schedule news",
+            "technical patch or maintenance news",
+            "none of these",
+        ],
+    },
+    {
+        "question": "Is this about a gacha franchise (Genshin, Honkai, ZZZ, NIKKE, Blue Archive, Azur Lane, Epic Seven or similar)?",
+        "options": ["yes", "no"],
+    },
+    {
+        "question": "Does this headline have a strong hook (surprise, controversy, hype or an emotional angle that draws attention)?",
+        "options": ["yes", "no"],
+    },
+]
+
+# Priorité de chaque catégorie, alignée sur la table de souls/actufinder.md.
+DECIDER_CATEGORY_RANK = {
+    "new female character reveal from a game or anime": 10,
+    "trailer or update revealing a detail about an existing female character": 10,
+    "controversy or popularity spike of a specific female character": 9,
+    "new skin or outfit for an existing female character": 9,
+    "male character or cast roster news": 4,
+    "game or service news without any character": 2,
+    "anime release date or schedule news": 1,
+    "technical patch or maintenance news": 0,
+    "none of these": 0,
+}
+
+# Seuil de priorité mini pour être éligible (équivaut à la règle bloquante du
+# soul : un article ne passe QUE si perso féminin nommé ET priorité >= 8).
+DECIDER_MIN_PRIORITY = 8
+DECIDER_GACHA_BONUS = 5
+DECIDER_HOOK_BONUS = 5

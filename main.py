@@ -20,7 +20,7 @@ from helpers.state import (
     _get_history, _push_history,
     _get_traces,
     _resolve_validation, _resolve_validation_by_message, _cleanup_stale_validations,
-    _get_sub_shared,
+    _get_sub_shared, set_auto_approve, is_auto_approve,
 )
 from helpers.send_telegram import send_telegram
 from helpers.call_llm import log
@@ -100,7 +100,8 @@ def build_flow() -> AsyncFlow:
 
     # Chemin alternatif : Actufinder → ScriptWriter (alt)
     # ValidationSubFlowNode → propage l'action interne : "approve" (news validée)
-    # continue vers sw_alt, "abort" (aucune news après MAX_RETRIES) arrête le pipeline.
+    # continue vers sw_alt, "no_good_news" (pool analysé, aucun éligible / Top-K
+    # épuisé) arrête le pipeline proprement.
     actufinder = ValidationSubFlowNode("actufinder", build_actufinder_flow,
                                        ["topic", "news_feedback"],
                                        ["selected_article"])
@@ -555,6 +556,7 @@ async def get_step_traces(step: str):
 @app.post("/api/state/trigger")
 async def trigger_pipeline(request: Request):
     global _PIPELINE_TASK, _PENDING_TOPIC, _PENDING_ROUTE
+    set_auto_approve(False)
     state = await _get_state()
     if state.get("pipeline_running"):
         return JSONResponse({"status": "error", "message": "Pipeline already running"}, status_code=409)
@@ -568,6 +570,25 @@ async def trigger_pipeline(request: Request):
         _PENDING_TOPIC = ""
     _PIPELINE_TASK = asyncio.create_task(run_pipeline_once())
     return {"status": "ok", "message": "Pipeline triggered"}
+
+
+@app.post("/api/state/trigger-test")
+async def trigger_test_pipeline(request: Request):
+    """Déclenche un run de test : chemin alt forcé + toutes les validations
+    Telegram auto-approuvées (bouton "Trigger Test" de la vue Svelte)."""
+    global _PIPELINE_TASK, _PENDING_TOPIC, _PENDING_ROUTE
+    state = await _get_state()
+    if state.get("pipeline_running"):
+        return JSONResponse({"status": "error", "message": "Pipeline already running"}, status_code=409)
+    set_auto_approve(True)
+    try:
+        body = await request.json()
+        _PENDING_TOPIC = body.get("topic", "")
+    except Exception:
+        _PENDING_TOPIC = ""
+    _PENDING_ROUTE = "alt"
+    _PIPELINE_TASK = asyncio.create_task(run_pipeline_once())
+    return {"status": "ok", "message": "Pipeline de test déclenché (auto-approve TG, chemin alt)"}
 
 
 @app.post("/api/state/cancel")
@@ -585,6 +606,7 @@ async def cancel_pipeline():
 async def debug_run_sw_validate():
     """Test isolé: scriptwriter -> validate_sw sur Telegram (mock inputs)."""
     global _PIPELINE_TASK
+    set_auto_approve(False)
     state = await _get_state()
     if state.get("pipeline_running"):
         return JSONResponse({"status": "error", "message": "Pipeline already running"}, status_code=409)
@@ -596,6 +618,7 @@ async def debug_run_sw_validate():
 async def debug_run_vf_validate():
     """Test isolé: viralfinder -> validate_vf sur Telegram (recherche TikHub réelle)."""
     global _PIPELINE_TASK
+    set_auto_approve(False)
     state = await _get_state()
     if state.get("pipeline_running"):
         return JSONResponse({"status": "error", "message": "Pipeline already running"}, status_code=409)
@@ -607,6 +630,7 @@ async def debug_run_vf_validate():
 async def debug_run_af_validate():
     """Test isolé: validate_af (assets existants) -> bouton 🎨 Regen I2V sur Telegram."""
     global _PIPELINE_TASK
+    set_auto_approve(False)
     state = await _get_state()
     if state.get("pipeline_running"):
         return JSONResponse({"status": "error", "message": "Pipeline already running"}, status_code=409)
@@ -618,6 +642,7 @@ async def debug_run_af_validate():
 async def debug_run_sw_alt_validate():
     """Test isolé: Thinking Agent + Brainstorm + ScriptWriter InfoMissed (article mock)."""
     global _PIPELINE_TASK
+    set_auto_approve(False)
     state = await _get_state()
     if state.get("pipeline_running"):
         return JSONResponse({"status": "error", "message": "Pipeline already running"}, status_code=409)
@@ -629,6 +654,7 @@ async def debug_run_sw_alt_validate():
 async def debug_run_af_alt_validate():
     """Test isolé: flow AssetFinder ALT complet (script + selected_article injectés)."""
     global _PIPELINE_TASK
+    set_auto_approve(False)
     state = await _get_state()
     if state.get("pipeline_running"):
         return JSONResponse({"status": "error", "message": "Pipeline already running"}, status_code=409)

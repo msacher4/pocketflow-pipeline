@@ -1,18 +1,21 @@
 import json
 import logging
-import random
 import asyncio
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse
 
 import httpx
 from pocketflow import AsyncNode
 
 from config_actufinder import (
-    RSS_FEEDS, WAFU_PRIORITY_FEEDS, BLOCKED_SOURCES, BLOCKED_URL_HOSTS,
+    ALL_FEEDS,
+    BLOCKED_SOURCES, BLOCKED_URL_HOSTS,
+    DECIDER_QUESTIONS, DECIDER_CATEGORY_RANK, DECIDER_MIN_PRIORITY,
+    DECIDER_GACHA_BONUS, DECIDER_HOOK_BONUS, DECIDER_TOP_K, DECIDER_MAX_CTX_TOKENS,
+    POOL_MAX_ARTICLES,
 )
 from config import LLM_MODEL
 from helpers.state import (
@@ -67,120 +70,49 @@ def blocked_host(url: str) -> str | None:
         return None
     return host if host in BLOCKED_URL_HOSTS else None
 
-# Nombre max d'articles présentés au LLM (les plus récents en priorité).
-# Modèle de raisonnement (qwen3.6q2) = verbeux : un prompt trop gros fait
-# dépasser le timeout (ReadTimeout 600s). On borne à 8 pour raisonner vite.
+# Nombre max d'articles présentés au LLM (repli historique, sans decider).
+# Le chemin principal passe par DeciderScoreNode -> DECIDER_TOP_K candidats.
 MAX_ARTICLES_TO_LLM = 8
 
-# Nombre de tentatives max (flux RSS différents) avant d'abandonner.
-# Ne compte QUE les vraies "no good news" (articles présents mais jugés
-# insuffisants) ; un feed VIDE (0 article) ne consomme pas une tentative.
-MAX_RETRIES = 15
 
+class FetchAllFeedsNode(AsyncNode):
+    """Télécharge TOUS les feeds RSS en parallèle et merge le pool brut.
 
-class RandomFeedNode(AsyncNode):
-    """Choisit un flux RSS au hasard et gère le compteur de tentatives du subflow.
-
-    - retourne "default" quand un flux est choisi
-    - retourne "abort" après MAX_RETRIES sans bonne news (boucle no_good_news)
+    Les 13 feeds (RSS_FEEDS + WAFU_PRIORITY_FEEDS) sont poolés en un seul lot :
+    plus de boucle de retry flux par flux. Déduplication par URL de flux
+    (un même article présent sur 2 feeds n'est compté qu'une fois, l'ordre du
+    premier feed rencontré est conservé).
     """
-
-    def __init__(self):
-        super().__init__(max_retries=1, wait=5)
-
-    async def prep_async(self, shared):
-        shared["_current_step"] = "actufinder_random_feed"
-        await _set_state(**_shared_snapshot(shared))
-        return shared
-
-    async def exec_async(self, shared):
-        # Un feed vide (0 article) est un problème ponctuel de feed/actu et ne
-        # consomme PAS une tentative d'abandon : on retente un autre flux sans
-        # compter. Seule une vraie absence de bonne news (articles présents mais
-        # jugés insuffisants par le LLM) incrémente le compteur.
-        empty_feed = bool(shared.pop("_actufinder_empty_feed", False))
-        attempts = shared.get("_actufinder_attempts", 0)
-        if not empty_feed:
-            attempts += 1
-            shared["_actufinder_attempts"] = attempts
-        if attempts > MAX_RETRIES:
-            log.info(f"ActuFinder: max retries ({MAX_RETRIES}) atteint, stop")
-            return {"abort": True}
-
-        # Échantillonnage SANS remise : chaque tentative pioche un feed non encore
-        # tenté dans ce run, pour maximiser la diversité (au lieu de re-tomber sur
-        # les mêmes feeds pauvres). Les feeds ciblés "personnage féminin" (waifu)
-        # sont tirés EN PRIORITÉ : on ne se rabat sur les feeds génériques qu'une
-        # fois que tous les prioritaires ont été tentés. Si tous les feeds ont été
-        # vus, on repart du début.
-        tried = shared.setdefault("_actufinder_tried_feeds", [])
-        prio = [f for f in WAFU_PRIORITY_FEEDS if f not in tried]
-        if prio:
-            candidates = prio
-        else:
-            candidates = [f for f in RSS_FEEDS if f not in tried]
-            if not candidates:
-                tried.clear()
-                candidates = list(RSS_FEEDS)
-        url = random.choice(candidates)
-        tried.append(url)
-        query = urlparse(url).query
-        q = ""
-        for part in query.split("&"):
-            if part.startswith("q="):
-                q = unquote(part[2:])
-                break
-        log.info(f"ActuFinder: feed selected -> '{q}' (tentative {attempts})")
-        return {"query": q, "url": url, "attempt": attempts}
-
-    async def post_async(self, shared, prep, exec):
-        if exec.get("abort"):
-            shared["_current_step"] = "actufinder_no_feed"
-            shared["steps"].append({
-                "step": "actufinder_random_feed", "status": "abort",
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "output": f"max retries ({MAX_RETRIES}) atteint",
-            })
-            shared["_actufinder_aborted"] = True
-            await _set_state(**_shared_snapshot(shared))
-            await send_telegram(
-                "❌ ActuFinder : aucune bonne news trouvée après "
-                f"{MAX_RETRIES} tentatives. Pipeline arrêté pour ce thème."
-            )
-            _save_sub_shared("actufinder", shared)
-            return "abort"
-
-        shared["selected_feed"] = exec
-        shared["_current_step"] = "actufinder_random_feed_done"
-        shared["steps"].append({
-            "step": "actufinder_random_feed", "status": "ok",
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "input": "", "output": exec["query"],
-        })
-        await _set_state(**_shared_snapshot(shared))
-        _save_sub_shared("actufinder", shared)
-        return "default"
-
-
-class FetchRSSNode(AsyncNode):
-    """Télécharge le flux RSS sélectionné et recupere les articles bruts."""
 
     def __init__(self):
         super().__init__(max_retries=2, wait=5)
 
     async def prep_async(self, shared):
-        shared["_current_step"] = "actufinder_fetch"
+        shared["_current_step"] = "actufinder_fetch_all"
         await _set_state(**_shared_snapshot(shared))
-        return shared.get("selected_feed", {})
+        return shared
 
-    async def exec_async(self, feed):
-        url = feed.get("url", "")
-        if not url:
-            raise RuntimeError("ActuFinder fetch: no feed url")
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
-            r = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
-            r.raise_for_status()
-        return {"articles": self._parse_feed(r.text)}
+    async def exec_async(self, shared):
+        async def _fetch(url):
+            try:
+                async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+                    r = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
+                    r.raise_for_status()
+                return self._parse_feed(r.text)
+            except Exception as e:
+                log.warning(f"ActuFinder: feed {url} en échec: {e}")
+                return []
+
+        results = await asyncio.gather(*(_fetch(u) for u in ALL_FEEDS))
+        seen_urls = set()
+        merged = []
+        for articles in results:
+            for a in articles:
+                if not a.get("url") or a["url"] in seen_urls:
+                    continue
+                seen_urls.add(a["url"])
+                merged.append(a)
+        return {"articles": merged}
 
     def _parse_feed(self, xml_text: str) -> list:
         articles = []
@@ -193,7 +125,6 @@ class FetchRSSNode(AsyncNode):
         def _local(tag: str) -> str:
             return tag.split("}")[-1] if "}" in tag else tag
 
-        # Google News renvoie un flux Atom (<entry>), on couvre item/entry.
         for item in root.iter():
             if _local(item.tag) not in ("item", "entry"):
                 continue
@@ -217,14 +148,244 @@ class FetchRSSNode(AsyncNode):
 
     async def post_async(self, shared, prep, exec):
         shared["raw_articles"] = exec["articles"]
-        shared["_current_step"] = "actufinder_fetch_done"
+        shared["_current_step"] = "actufinder_fetch_all_done"
         shared["steps"].append({
-            "step": "actufinder_fetch", "status": "ok",
+            "step": "actufinder_fetch_all", "status": "ok",
             "ts": datetime.now(timezone.utc).isoformat(),
-            "output": f"{len(exec['articles'])} articles",
+            "output": f"{len(exec['articles'])} articles ({len(ALL_FEEDS)} feeds mergés)",
         })
         await _set_state(**_shared_snapshot(shared))
         _save_sub_shared("actufinder", shared)
+        return "default"
+
+
+class DeciderScoreNode(AsyncNode):
+    """Score rapide du pool via decider-4b (in-process, libllama HIP).
+
+    Pour chaque article : 4 questions en un forward (perso féminin nommé ?
+    catégorie ? gacha ? hook ?). Un article est ELIGIBLE si perso féminin de
+    fiction nommé (Q1=yes) ET prioritÉ de catégorie >= DECIDER_MIN_PRIORITY.
+    Score combine = priorité*10 + gacha + hook + fraîcheur. Le pool est
+    tronqué aux ~300 premiers (POOL_MAX_ARTICLES), le Top-DECIDER_TOP_K est
+    transmis au LLM final.
+
+    - "default" : au moins un candidat éligible
+    - "no_good_news" : zéro article éligible -> arrêt propre (plus de boucle
+      de retry flux par flux).
+    """
+
+    def __init__(self):
+        super().__init__(max_retries=1, wait=5)
+
+    async def prep_async(self, shared):
+        shared["_current_step"] = "actufinder_decider_score"
+        await _set_state(**_shared_snapshot(shared))
+        return shared
+
+    @staticmethod
+    def _free_host_vram():
+        """Best-effort : arrête le llama-server local + cleanup (swap) pour
+        libérer la VRAM avant de (re)charger decider-4b en in-process. Miroir
+        du nœud CleanupLlamaProxy, appelé en secours si le chargement échoue."""
+        import time
+        import urllib.request
+
+        base = "http://localhost:8080/api/proxy"
+        for ep in ("/stop", "/cleanup"):
+            try:
+                req = urllib.request.Request(
+                    base + ep, data=b"", method="POST")
+                urllib.request.urlopen(req, timeout=30)
+            except Exception:
+                pass
+        time.sleep(3)
+
+    @staticmethod
+    def _freshness(published_at: str) -> int:
+        if not published_at:
+            return 0
+        try:
+            dt = parsedate_to_datetime(published_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age_h = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+        except Exception:
+            return 0
+        if age_h < 12:
+            return 5
+        if age_h < 24:
+            return 4
+        if age_h < 48:
+            return 3
+        if age_h < 72:
+            return 2
+        return 0
+
+    def _context_for(self, a: dict) -> str:
+        parts = [
+            a.get("title", ""),
+            f"Source: {a.get('source', '')}",
+            f"Published: {a.get('published_at', '')}",
+            (a.get("description") or "")[:300],
+        ]
+        return "\n".join(p for p in parts if p)
+
+    def _score_articles(self, articles: list):
+        """Scoring du pool. Retourne (scored, cached_count) :
+        - cached_count = articles dont le verdict venait du cache (0 décoder appelé)
+        - scored = liste des articles avec champs ai_*, dans l'ordre du pool."""
+        from helpers import decider as D
+        from .decider_cache import (
+            load_decider_cache, save_decider_cache, cached_verdict_for,
+        )
+
+        pool = articles[:POOL_MAX_ARTICLES]
+        cache = load_decider_cache()
+        cached_count = 0
+
+        # 1) Verdicts déjà connus (URL + titre identique) : réutilisés tels
+        #    quels. Seuls les articles NOUVEAUX passent par decider-4b.
+        verdicts = {}
+        to_score = []
+        for i, a in enumerate(pool):
+            url = a.get("url", "")
+            title = (a.get("title") or "").strip()
+            entry = cached_verdict_for(cache, url, title)
+            if entry is not None:
+                verdicts[url] = entry
+                cached_count += 1
+            else:
+                to_score.append((i, a))
+
+        # 2) Scoring des nouveaux articles (un forward par article, séquentiel).
+        #    Preflight moteur : au premier besoin on charge decider-4b (in-process).
+        #    En échec → 1 retry après libération VRAM best-effort ; si toujours KO,
+        #    UN seul log d'erreur clair et on abandonne le scoring (plus de
+        #    warning par article).
+        if to_score and not D.engine_loaded():
+            try:
+                D.engine_load()
+            except Exception:
+                self._free_host_vram()
+                try:
+                    D.engine_load()
+                except Exception as exc:
+                    log.error("ActuFinder: decider-4b impossible à charger malgré "
+                              "libération VRAM (%s) — %d article(s) non scoré(s)",
+                              exc, len(to_score))
+                    to_score = []
+        for i, a in to_score:
+            ctx = self._context_for(a)
+            try:
+                decs = D.decide(ctx, DECIDER_QUESTIONS,
+                                max_ctx_tokens=DECIDER_MAX_CTX_TOKENS)
+            except Exception as e:
+                log.warning(f"ActuFinder: decider en échec sur article {i} ({e})")
+                continue
+            q1_yes = decs[0]["choice"] == "yes"
+            category = decs[1]["choice"]
+            prio = DECIDER_CATEGORY_RANK.get(category, 0)
+            gacha = decs[2]["choice"] == "yes"
+            hook = decs[3]["choice"] == "yes"
+            eligible = q1_yes and prio >= DECIDER_MIN_PRIORITY
+            url = (a.get("url") or "").strip()
+            entry = {
+                "title": (a.get("title") or "").strip(),
+                "q1": q1_yes,
+                "cat": category,
+                "prio": prio,
+                "gacha": gacha,
+                "hook": hook,
+                "eligible": eligible,
+                "conf": round(decs[0]["confidence"], 3),
+            }
+            cache[url] = entry
+            verdicts[url] = entry
+        # 3) Persistance (bornée). La fraîcheur n'est JAMAIS cachée : elle est
+        #    recalculée à chaque run pour les articles encore frais/septuagés.
+        save_decider_cache(cache)
+
+        # 4) Assemblage final dans l'ordre du pool + score complet avec fraîcheur.
+        scored = []
+        for i, a in enumerate(pool):
+            entry = verdicts.get(a.get("url", ""))
+            if entry is None:
+                continue
+            fresh = self._freshness(a.get("published_at", ""))
+            score = min(
+                100,
+                entry["prio"] * 10
+                + (DECIDER_GACHA_BONUS if entry["gacha"] else 0)
+                + (DECIDER_HOOK_BONUS if entry["hook"] else 0)
+                + fresh,
+            )
+            sub = dict(a)
+            sub.update(
+                ai_q1=entry["q1"],
+                ai_cat=entry["cat"],
+                ai_prio=entry["prio"],
+                ai_gacha=entry["gacha"],
+                ai_hook=entry["hook"],
+                ai_conf=entry["conf"],
+                ai_eligible=entry["eligible"],
+                ai_score=score,
+                ai_idx=i,
+            )
+            scored.append(sub)
+        return scored, cached_count
+
+    async def exec_async(self, shared):
+        articles = shared.get("filtered_articles", [])
+        if not articles:
+            return {"scored": 0, "eligible": 0, "candidates": [], "cached": 0}
+        scored, cached_count = await asyncio.to_thread(self._score_articles, articles)
+        eligible = sorted(
+            (s for s in scored if s["ai_eligible"]),
+            key=lambda s: (-s["ai_score"], -s["ai_conf"]),
+        )
+        candidates = eligible[:DECIDER_TOP_K]
+        return {
+            "scored": len(scored),
+            "eligible": len(eligible),
+            "candidates": candidates,
+            "cached": cached_count,
+        }
+
+    async def post_async(self, shared, prep, exec):
+        from helpers import decider as D
+
+        shared["decider_candidates"] = exec["candidates"]
+        shared["decider_stats"] = {
+            "scored": exec.get("scored", 0),
+            "eligible": exec.get("eligible", 0),
+            "cached": exec.get("cached", 0),
+            "pool_max": POOL_MAX_ARTICLES,
+            "top_k": DECIDER_TOP_K,
+        }
+        # Le scoring est terminé : on décharge le modèle pour libérer la VRAM
+        # avant l'appel LLM final (et dans tous les cas de sortie).
+        D.engine_free()
+
+        shared["_current_step"] = "actufinder_decider_score_done"
+        shared["steps"].append({
+            "step": "actufinder_decider_score", "status": "ok",
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "output": f"{len(exec['candidates'])} candidat(s) sur "
+                      f"{exec.get('eligible', 0)} éligibles / {exec.get('scored', 0)} scorés "
+                      f"({exec.get('cached', 0)} du cache)",
+        })
+        await _set_state(**_shared_snapshot(shared))
+        _save_sub_shared("actufinder", shared)
+
+        if not exec["candidates"]:
+            try:
+                await send_telegram(
+                    "❌ ActuFinder : aucun article éligible parmi "
+                    f"{exec.get('scored', 0)} analysés. Pipeline arrêté pour ce thème."
+                )
+            except Exception as e:
+                log.warning(f"ActuFinder: telegram abort: {e}")
+            return "no_good_news"
         return "default"
 
 
@@ -296,7 +457,7 @@ class LLMSelectNode(AsyncNode):
     """Le LLM choisit LA meilleure news à potentiel TikTok parmi les articles filtrés.
 
     - retourne "default" quand une bonne news est trouvée
-    - retourne "no_good_news" sinon (boucle de retry vers RandomFeedNode)
+    - retourne "no_good_news" sinon (arrêt propre, Top-K épuisé)
     """
 
     def __init__(self):
@@ -310,22 +471,33 @@ class LLMSelectNode(AsyncNode):
     async def exec_async(self, shared):
         from .used_articles import is_used
 
-        articles = shared.get("filtered_articles", [])
-        if not articles:
-            return {"status": "no_good_news", "empty": True}
-
-        # On exclut les URLs déjà consommées dans CE run (rejet title_gate,
-        # extract_character, validation feedback...) pour éviter de re-soumettre
-        # au LLM un article déjà écarté.
-        articles = [a for a in articles if not is_used(a.get("url", ""))]
+        # Chemin principal (nouveau) : Top-DECIDER_TOP_K candidats pré-scoreés
+        # par decider-4b. Repli historique : premiers articles filtrés (tests,
+        # re-sélection après validation sans decider).
+        candidates = shared.get("decider_candidates")
+        if candidates:
+            articles = [c for c in candidates if not is_used(c.get("url", ""))]
+        else:
+            articles = shared.get("filtered_articles", [])
+            articles = [a for a in articles if not is_used(a.get("url", ""))][:MAX_ARTICLES_TO_LLM]
         if not articles:
             return {"status": "no_good_news"}
 
-        to_llm = articles[:MAX_ARTICLES_TO_LLM]
+        to_llm = articles
         lines = []
         for i, a in enumerate(to_llm, 1):
+            hint = ""
+            if "ai_score" in a:
+                flags = []
+                if a.get("ai_gacha"):
+                    flags.append("gacha")
+                if a.get("ai_hook"):
+                    flags.append("hook")
+                cat_short = (a.get("ai_cat") or "")[:32] + ("…" if len(a.get("ai_cat") or "") > 32 else "")
+                hint = f" [ai {a['ai_score']} conf {a.get('ai_conf', 0)} · {cat_short}" \
+                       + (f" · {','.join(flags)}" if flags else "") + "]"
             lines.append(
-                f"[{i}] title: {a.get('title', '')}\n"
+                f"[{i}] title: {a.get('title', '')}{hint}\n"
                 f"    source: {a.get('source', '')} | published: {a.get('published_at', '')}\n"
                 f"    desc: {(a.get('description') or '')[:500]}"
             )
@@ -335,7 +507,7 @@ class LLMSelectNode(AsyncNode):
         reformat_error = shared.get("_reformat_error", "")
         ctx = (
             f"Thème: {shared.get('topic', '')}\n\n"
-            f"Articles du flux sélectionné ({len(to_llm)}), numérotés [1] à [{len(to_llm)}]:\n"
+            f"Articles présélectionnés ({len(to_llm)}), numérotés [1] à [{len(to_llm)}]:\n"
             f"{articles_block}\n\n"
             f"Retourne UNIQUEMENT un JSON valide, sans texte avant ni après.\n"
             f"Format : {{\"selected_article\": <index entier >= 1>, \"score\": <entier 0-100>, "
@@ -431,13 +603,9 @@ class LLMSelectNode(AsyncNode):
             _save_sub_shared("actufinder", shared)
             return "default"
 
-        # Aucune bonne news → route vers RandomFeedNode pour choisir un autre flux.
-        # On distingue un feed VIDE (0 article : problème réseau/actu, ne consomme
-        # pas une tentative d'abandon) d'une vraie absence de bonne news.
-        shared["_actufinder_empty_feed"] = bool(exec.get("empty"))
-        log.info(
-            f"ActuFinder: no good news (empty_feed={shared['_actufinder_empty_feed']})"
-        )
+        # Aucune bonne news parmi les candidats -> arrêt propre (plus de boucle
+        # de retry flux par flux : le pool est déjà exhaustif).
+        log.info("ActuFinder: no good news parmi les candidats présélectionnés")
         shared["_current_step"] = "actufinder_no_good_news"
         shared["steps"].append({
             "step": "actufinder_llm_select", "status": "no_good_news",
@@ -445,6 +613,13 @@ class LLMSelectNode(AsyncNode):
             "output": "Aucune news suffisamment intéressante",
         })
         await _set_state(**_shared_snapshot(shared))
+        try:
+            await send_telegram(
+                "❌ ActuFinder : aucun candidat retenu (pool analysé, "
+                "Top-K épuisé). Pipeline arrêté pour ce thème."
+            )
+        except Exception as e:
+            log.warning(f"ActuFinder: telegram abort: {e}")
         return "no_good_news"
 
 

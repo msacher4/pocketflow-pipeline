@@ -81,7 +81,6 @@ class TitleCharacterGateNode(AsyncNode):
             from .used_articles import mark_used
             mark_used(url)
         shared["_title_gate_attempts"] = shared.get("_title_gate_attempts", 0) + 1
-        shared["_actufinder_empty_feed"] = False
         log.info(
             f"ActuFinder: title_gate rejette (pas de perso nommé) "
             f"-> {article.get('title', '')[:70]} (tentative gate "
