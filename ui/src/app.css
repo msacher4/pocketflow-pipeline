@@ -291,6 +291,25 @@ body {
   cursor: not-allowed;
 }
 
+.pf-trigger-test-btn {
+  background: #8957e5;
+  border: 1px solid #8957e5;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.pf-trigger-test-btn:hover:not(:disabled) {
+  background: #a371f7;
+}
+.pf-trigger-test-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .pf-stop-btn {
   background: #cf222e;
   border: 1px solid #cf222e;

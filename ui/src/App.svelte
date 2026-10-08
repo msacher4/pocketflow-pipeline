@@ -4,7 +4,7 @@
   import StepNode from './lib/nodes/StepNode.svelte';
   import CustomStepEdge from './lib/nodes/CustomStepEdge.svelte';
   import { computeLayout } from './lib/dagre-layout.js';
-  import { fetchState, fetchFlow, fetchSubShared, fetchTraces, fetchShared, fetchPositions, savePositions as apiSavePositions, triggerPipeline, cancelPipeline } from './lib/api.js';
+  import { fetchState, fetchFlow, fetchSubShared, fetchTraces, fetchShared, fetchPositions, savePositions as apiSavePositions, triggerPipeline, triggerTestPipeline, cancelPipeline } from './lib/api.js';
   import { NODE_TYPES } from './lib/pipeline-data.js';
 
   const nodeTypes = { step: StepNode };
@@ -150,6 +150,18 @@
     const res = await triggerPipeline(topic);
     pipelineRunning = true;
     actionMsg = res?.message || 'Pipeline déclenché';
+    setTimeout(() => { actionMsg = ''; }, 5000);
+  }
+
+  async function handleTriggerTest() {
+    if (!topic.trim()) {
+      actionMsg = '⚠️ Entrez un mot-clé';
+      return;
+    }
+    actionMsg = '';
+    const res = await triggerTestPipeline(topic);
+    pipelineRunning = true;
+    actionMsg = res?.message || 'Pipeline test déclenché';
     setTimeout(() => { actionMsg = ''; }, 5000);
   }
 
@@ -470,6 +482,9 @@
     />
     <button class="pf-trigger-btn" onclick={handleTrigger} disabled={pipelineRunning} title="Lancer le pipeline">
       ▶ Trigger
+    </button>
+    <button class="pf-trigger-test-btn" onclick={handleTriggerTest} disabled={pipelineRunning} title="Run de test : chemin alt + validations Telegram auto-approuvées">
+      🧪 Trigger Test
     </button>
     <button class="pf-stop-btn" onclick={handleStop} disabled={!pipelineRunning} title="Arrêter le pipeline">
       ⏹ Stop

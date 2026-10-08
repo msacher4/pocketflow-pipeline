@@ -8,6 +8,8 @@ export const NODE_TYPES = {
   videoeditor:  { icon: '🎬', label: 'VideoEditor',        model: '' },
   // Chemin alt (InfoMissed + images réelles)
   actufinder:   { icon: '📰', label: 'ActuFinder',         model: '' },
+  actufinder_fetch_all:{ icon: '📡', label: 'Fetch All Feeds', model: '' },
+  actufinder_decider_score:{ icon: '🧮', label: 'Decider Score', model: 'decider-4b' },
   actufinder_synthesize:{ icon: '🧬', label: 'Synthesize Article', model: 'qwen-opus' },
   actufinder_title_gate:{ icon: '🎯', label: 'Gate Personnage', model: 'qwen-opus' },
   scriptwriter_alt:{ icon: '📝', label: 'SW InfoMissed',   model: '' },

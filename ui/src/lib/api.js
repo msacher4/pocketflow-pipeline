@@ -40,6 +40,16 @@ export async function triggerPipeline(topic) {
   return r.json();
 }
 
+export async function triggerTestPipeline(topic) {
+  // Run de test : chemin alt + validations Telegram auto-approuvées côté daemon.
+  const r = await fetch(`${BASE}/api/pocketflow/trigger-test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic }),
+  });
+  return r.json();
+}
+
 export async function cancelPipeline() {
   const r = await fetch(`${BASE}/api/pocketflow/cancel`, { method: 'POST' });
   return r.json();
