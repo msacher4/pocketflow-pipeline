@@ -16,6 +16,19 @@ _HISTORY_LOCK = asyncio.Lock()
 
 _pending_validations: dict[str, dict] = {}
 
+_AUTO_APPROVE = False
+
+
+def set_auto_approve(enabled: bool) -> None:
+    """Mode test : toutes les validations Telegram se résolvent d'elles-mêmes."""
+    global _AUTO_APPROVE
+    _AUTO_APPROVE = enabled
+    log.info("[tg] auto-approve %s", "ON" if enabled else "OFF")
+
+
+def is_auto_approve() -> bool:
+    return _AUTO_APPROVE
+
 async def _set_state(**kwargs):
     async with _CACHED_STATE_LOCK:
         _CACHED_STATE.update(kwargs)
@@ -61,7 +74,21 @@ def _register_validation(vid: str):
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
-    _pending_validations[vid] = {"event": event, "result": None, "created": time.time(), "message_ids": [], "loop": loop}
+    entry = {"event": event, "result": None, "created": time.time(), "message_ids": [], "loop": loop}
+    _pending_validations[vid] = entry
+    if _AUTO_APPROVE:
+        # Mode test : on résout immédiatement, sans attendre les boutons Telegram.
+        result = "approve"
+        if vid.startswith("bs_"):
+            # Le brainstorm attend "brainstorm_validate" ; n'importe quelle autre
+            # valeur le ferait boucler à l'infini dans while True.
+            result = "brainstorm_validate"
+        entry["result"] = result
+        log.info("[tg] auto-approve resolved %s -> %s", vid, result)
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(event.set)
+        else:
+            event.set()
     return event
 
 def _attach_message(vid: str, msg_id: int):

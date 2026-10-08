@@ -7,7 +7,7 @@ import tempfile
 import httpx
 
 from config import TG_BOT_TOKEN, TG_CHAT_ID
-from .state import _register_validation, _pending_validations
+from .state import _register_validation, _pending_validations, is_auto_approve
 
 log = logging.getLogger("pocketflow-pipeline")
 
@@ -15,20 +15,28 @@ _MAX_CHARS = 4000
 _TG_MAX_VIDEO_SIZE = 50 * 1024 * 1024  # 50 MB
 
 async def send_telegram(text: str, buttons: list | None = None) -> int | None:
-    """Send a Telegram message, return sent message_id or None."""
+    """Send a Telegram message, return sent message_id or None.
+    Fail-open : une erreur réseau renvoie None au lieu de faire tomber le run."""
     if not TG_BOT_TOKEN:
         log.info(f"[tg] SKIP (no token): {text[:60]}...")
         return None
     msg_id = None
-    async with httpx.AsyncClient(timeout=10) as c:
-        for i, chunk in enumerate(_split_text(text)):
-            payload = {"chat_id": TG_CHAT_ID, "text": chunk}
-            if buttons and i == 0:
-                payload["reply_markup"] = {"inline_keyboard": buttons}
-            r = await c.post(f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage", json=payload)
-            if i == 0 and r.status_code == 200:
-                result = r.json().get("result", {})
-                msg_id = result.get("message_id")
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            for i, chunk in enumerate(_split_text(text)):
+                payload = {"chat_id": TG_CHAT_ID, "text": chunk}
+                if buttons and i == 0:
+                    payload["reply_markup"] = {"inline_keyboard": buttons}
+                r = await c.post(f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage", json=payload)
+                if i == 0 and r.status_code == 200:
+                    result = r.json().get("result", {})
+                    msg_id = result.get("message_id")
+                elif i == 0:
+                    log.warning(f"sendMessage failed ({r.status_code}): {r.text[:200]}")
+                    return None
+    except Exception as e:
+        log.warning(f"send_telegram error: {e}")
+        return None
     return msg_id
 
 def _split_text(text: str, max_chars: int = _MAX_CHARS) -> list[str]:
@@ -47,6 +55,10 @@ def _split_text(text: str, max_chars: int = _MAX_CHARS) -> list[str]:
     return parts
 
 async def send_and_wait_validation(vid: str, text: str, buttons: list, timeout: int) -> str:
+    if is_auto_approve():
+        # Mode test : rien à envoyer, tout est validé.
+        log.info(f"[tg] auto-approve skip send_and_wait {vid}")
+        return "approve"
     if not TG_BOT_TOKEN:
         log.info(f"[tg] SKIP (no token): {text[:60]}...")
         return "approve"
@@ -133,6 +145,9 @@ async def _upload_with_retry(
 
 async def send_video_tg(video_path: str, caption: str, buttons: list | None = None) -> int | None:
     """Upload a video to Telegram via sendVideo, return msg_id."""
+    if is_auto_approve():
+        log.info("[tg] auto-approve skip send_video_tg")
+        return None
     if not TG_BOT_TOKEN:
         log.info(f"[tg] SKIP send_video (no token): {caption[:60]}...")
         return None
@@ -178,6 +193,9 @@ async def compress_image_for_telegram(image_path: str, max_bytes: int = 10 * 102
 
 async def send_audio_tg(audio_path: str, caption: str, buttons: list | None = None) -> int | None:
     """Upload an audio file to Telegram via sendDocument, return msg_id."""
+    if is_auto_approve():
+        log.info("[tg] auto-approve skip send_audio_tg")
+        return None
     if not TG_BOT_TOKEN:
         log.info(f"[tg] SKIP send_audio (no token): {caption[:60]}...")
         return None

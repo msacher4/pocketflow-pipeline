@@ -213,7 +213,7 @@ class RouteChoiceNode(AsyncNode):
     async def exec_async(self, shared):
         from config import TG_BOT_TOKEN
         from helpers.send_telegram import send_telegram
-        from helpers.state import _register_validation, _pending_validations, _attach_message
+        from helpers.state import _register_validation, _pending_validations, _attach_message, is_auto_approve
 
         vid = f"{shared.get('pipeline_id', 'unknown')}_pf_route"
         text = (
@@ -221,6 +221,11 @@ class RouteChoiceNode(AsyncNode):
             f"Topic: {shared.get('topic', '?')}\n\n"
             f"Quel chemin veux-tu prendre ?"
         )
+
+        if is_auto_approve():
+            # Mode test : chemin alt forcé, pas de question Telegram.
+            log.info("[tg] auto-approve route -> alt")
+            return shared.get("route", "alt")
 
         if not TG_BOT_TOKEN:
             log.info("[tg] SKIP route choice (no token), defaulting to normal")

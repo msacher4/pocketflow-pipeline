@@ -27,10 +27,16 @@ class TGSendValidationNode(AsyncNode):
         return shared
 
     async def exec_async(self, shared):
+        from helpers.state import is_auto_approve
         vid = f"{shared.get('pipeline_id', 'unknown')}_{self.step_name}"
         text, extra_vid = self.format_msg(shared)
         if extra_vid:
             vid = extra_vid
+
+        if is_auto_approve():
+            # Mode test : rien à envoyer, tout est validé.
+            log.info(f"[tg] auto-approve skip send_node {self.step_name}")
+            return "approve"
 
         if not TG_BOT_TOKEN:
             log.info(f"[tg] SKIP (no token): {text[:60]}...")
