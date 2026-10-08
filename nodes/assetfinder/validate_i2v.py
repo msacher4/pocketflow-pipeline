@@ -16,6 +16,10 @@ log = logging.getLogger("pocketflow-pipeline")
 
 async def send_photo_tg(path: str, caption: str, buttons: list | None = None) -> int | None:
     """Send a photo to Telegram via sendPhoto (compression auto si > 10 Mo)."""
+    from helpers.state import is_auto_approve
+    if is_auto_approve():
+        log.info("[tg] auto-approve skip send_photo_tg")
+        return None
     if not TG_BOT_TOKEN:
         return None
     import os

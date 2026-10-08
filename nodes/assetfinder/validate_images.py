@@ -93,6 +93,10 @@ async def _send_assets_for_validation(assets: list[dict], vid: str) -> dict[str,
 
 async def _send_photo_tg(path: str, caption: str, buttons: list | None = None) -> int | None:
     """Send a photo to Telegram via sendPhoto (compression auto si > 10 Mo)."""
+    from helpers.state import is_auto_approve
+    if is_auto_approve():
+        log.info("[tg] auto-approve skip _send_photo_tg")
+        return None
     if not TG_BOT_TOKEN:
         return None
     import httpx, os
