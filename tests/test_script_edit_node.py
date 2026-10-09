@@ -20,6 +20,7 @@ import nodes.validation.feedback_node as fbmod
 from nodes.validation.feedback_node import (
     FeedbackInterpreterNode,
     ScriptEditFeedbackNode,
+    ScriptBoostNode,
 )
 from helpers.state import _pending_validations
 from helpers.call_llm import _extract_json
@@ -115,8 +116,8 @@ def test_edit_partiel():
     # l'ancienne phrase de fermeture du plan 3 a disparu
     plan3 = script.split("Plan 3")[1]
     assert "Arrows rain on the city." not in plan3
-    # retiming : plan 1 (I2V 3s) redeclaré 0-3s
-    assert "Plan 1 (0-3s)" in script, script
+    # retiming : plan 1 (I2V ≈4s) redeclaré 0-4s
+    assert "Plan 1 (0-4s)" in script, script
     # tout le script est toujours parseable en plans
     from nodes.scriptwriter.script_timing import parse_plans
     plans = parse_plans(script)
@@ -203,9 +204,82 @@ def test_feedback_no_slot_question():
     print("test_feedback_no_slot_question PASSED")
 
 
+# ---------------------------------------------------------------------------
+# Boost (⚡) — bypass total des validations
+# ---------------------------------------------------------------------------
+
+
+IMPESED = """Audio: UPBEAT_GAMING
+### HOOK (0-4s)
+- Plan 1 (0-4s)
+- Video: Kurumi slashes the arena gates wide open.
+- VO: Kurumi Fukuga breaks the pillars.
+"""
+
+
+def test_boost_imposes_script_strict():
+    """Le script collé remplace `script` EN L'ÉTAT (aucune revalidation, aucun
+    retime : les horaires déclarés par l'utilisateur sont conservés)."""
+    shared = _build_shared()
+    node = ScriptBoostNode(step_name="validate_sw_alt_boost")
+
+    async def scenario():
+        task = asyncio.create_task(_run(node, shared)())
+        ok = await _wait_registered_and_resolve(IMPESED)
+        assert ok
+        return await task
+
+    data, action = asyncio.run(scenario())
+    assert action == "approve", action
+    assert data["script"] == IMPESED.strip(), repr(data["script"])
+    # post_async écrit bien le script imposé dans shared
+    assert shared["script"] == IMPESED.strip()
+    _pending_validations.clear()
+    print("test_boost_imposes_script_strict PASSED")
+
+
+def test_boost_timeout_cancel():
+    """Timeout sans réponse → action 'cancel', script inchangé (on revient à
+    la validation, jamais d'enchaînement)."""
+    shared = _build_shared()
+    node = ScriptBoostNode(step_name="validate_sw_alt_boost")
+    node.timeout = 0.05
+
+    async def scenario():
+        return await _run(node, shared)()
+
+    data, action = asyncio.run(scenario())
+    assert action == "cancel", action
+    assert data["script"] == SCRIPT
+    assert shared["script"] == SCRIPT
+    _pending_validations.clear()
+    print("test_boost_timeout_cancel PASSED")
+
+
+def test_boost_empty_reply_cancel():
+    """Réponse vide → 'cancel' (pas de script à imposer, pas d'approve)."""
+    shared = _build_shared()
+    node = ScriptBoostNode(step_name="validate_sw_alt_boost")
+
+    async def scenario():
+        task = asyncio.create_task(_run(node, shared)())
+        ok = await _wait_registered_and_resolve("   ")
+        assert ok
+        return await task
+
+    data, action = asyncio.run(scenario())
+    assert action == "cancel", action
+    assert shared["script"] == SCRIPT
+    _pending_validations.clear()
+    print("test_boost_empty_reply_cancel PASSED")
+
+
 if __name__ == "__main__":
     test_edit_partiel()
     test_edit_script_complet()
     test_edit_timeout_sans_changement()
     test_feedback_no_slot_question()
+    test_boost_imposes_script_strict()
+    test_boost_timeout_cancel()
+    test_boost_empty_reply_cancel()
     print("ALL PASSED")

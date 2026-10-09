@@ -14,11 +14,12 @@ LLAMA_PROXY_BASE = "http://localhost:8080/api/proxy"
 class CleanupLlamaProxy(AsyncNode):
     """Stop + cleanup de llama-proxy pour libérer VRAM/RAM avant ComfyUI."""
 
-    def __init__(self):
+    def __init__(self, step="cleanup_llama_proxy"):
         super().__init__(max_retries=2, wait=10)
+        self.step = step
 
     async def prep_async(self, shared):
-        shared["_current_step"] = "cleanup_llama_proxy"
+        shared["_current_step"] = self.step
         await _set_state(**_shared_snapshot(shared))
         return shared
 
@@ -59,9 +60,9 @@ class CleanupLlamaProxy(AsyncNode):
         else:
             output = "unexpected result"
 
-        shared["_current_step"] = "cleanup_llama_proxy_done"
+        shared["_current_step"] = f"{self.step}_done"
         shared["steps"].append({
-            "step": "cleanup_llama_proxy", "status": status,
+            "step": self.step, "status": status,
             "ts": datetime.now(timezone.utc).isoformat(),
             "output": output,
         })

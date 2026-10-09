@@ -93,6 +93,14 @@ FOIS dans la VO du Plan 1 OU du Plan 2 :
 - utilise le nom EXACT du contexte, pas une variante ("Saber Alter", pas
   "Artoria Pendragon") ni un surnom ("the dark Saber") seul.
 
+Nommage de la FRANCHISE : le spectateur doit aussi savoir DE QUOI parle la
+vidéo. Le nom exact de `franchise` (fourni dans le contexte) doit apparaître
+dans au moins UNE VO — idéalement celle du Plan 1 ou 2, en même temps que le
+nom du personnage. Si la VO doit tenir (~2 mots/s), raccourcis le reste de la
+phrase POUR CASER LES DEUX noms dans le même plan plutôt que de sacrifier
+l'un des deux. Jamais d'abréviation ni de variante ("Grand Theft Auto", pas
+"GTA" en général).
+
 Exemple canonique (le piège le plus fréquent) :
 - P2 : "Fate/EXTRA Record finally puts her on your side."  ← PREMIÈRE, intouchable
 - P3 : "Fate/EXTRA Record gives it to you, her whole moveset is ready." ← redondante

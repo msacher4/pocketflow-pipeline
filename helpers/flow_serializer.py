@@ -59,6 +59,7 @@ NODE_TYPES = {
     "pydantic_script_validation_alt": {"icon": "✅", "label": "Pydantic SW (alt)", "model": ""},
     "validate_sw":              {"icon": "👤", "label": "Validation SW",        "model": "Telegram"},
     "validate_sw_alt":          {"icon": "👤", "label": "Validation SW (alt)",  "model": "Telegram"},
+    "validate_sw_alt_boost":    {"icon": "⚡", "label": "Boost script (bypass)", "model": "Telegram"},
     # AssetFinder subflow
     "asset_planner":            {"icon": "📋", "label": "AssetPlanner",         "model": "qwen-opus"},
     "asset_planner_alt":        {"icon": "📋", "label": "Planner Alt (2x I2V)", "model": "qwen-opus"},
@@ -68,6 +69,8 @@ NODE_TYPES = {
     "validate_i2v":             {"icon": "👤", "label": "Validation I2V",       "model": "Telegram"},
     "alt_i2_v":                 {"icon": "🎥", "label": "Alt I2V",              "model": "LTX-Video 2.3"},
     "cleanup_llama_proxy":      {"icon": "🧹", "label": "CleanupLlama",         "model": ""},
+    "actufinder_cleanup_llama": {"icon": "🧹", "label": "Cleanup Llama (Actu)",  "model": ""},
+    "assetfinder_cleanup_llama":{"icon": "🧹", "label": "Cleanup Llama (NF)",    "model": ""},
     "cleanup_llama_jev":        {"icon": "🧹", "label": "Cleanup Llama+Jev",    "model": ""},
     "retry_no_image":           {"icon": "🔁", "label": "Retry No Image",       "model": ""},
     "combined_cleanup":         {"icon": "🧹", "label": "Cleanup All",          "model": ""},

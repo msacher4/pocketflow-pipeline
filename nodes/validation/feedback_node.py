@@ -377,3 +377,107 @@ class ScriptEditFeedbackNode(AsyncNode):
         await _set_state(**_shared_snapshot(shared))
         await _set_traces(shared.get("_traces", {}))
         return "edit"
+
+
+class ScriptBoostNode(AsyncNode):
+    """Bouton ⚡ sur validate_sw_alt : impose la version COMPLÈTE fournie par
+    l'utilisateur, en BYPASSANT toutes les validations (fin de l'époque où une
+    correction utilisateur était re-gatée pydantic et jetée).
+
+    Le script reçu remplace `script` en l'état — aucun merge partiel, aucun
+    retime, aucun filet. L'utilisateur est responsable du format (horaires
+    cohérents, structure Plan N/VO:/Video:), l'AssetPlanner en aval le prendra
+    tel quel. Retourne 'approve' pour sortir du sous-flow de validation et
+    enchaîner vers AssetFinder. Timeout / sans script → 'cancel' (on revient à
+    l'attente de validation, jamais d'enchaînement)."""
+
+    def __init__(self, step_name: str = "validate_sw_alt_boost"):
+        super().__init__(max_retries=1, wait=5)
+        self.step_name = step_name
+        self.timeout = TG_VALIDATION_TIMEOUT
+
+    async def prep_async(self, shared):
+        shared["_current_step"] = f"{self.step_name}"
+        await _set_state(**_shared_snapshot(shared))
+        return shared
+
+    async def exec_async(self, shared):
+        base_vid = f"{shared.get('pipeline_id', 'unknown')}_{self.step_name}"
+
+        if not TG_BOT_TOKEN:
+            log.info("[tg] SKIP boost (no token)")
+            return json.dumps({"action": "approve", "script": shared.get("script", "")})
+
+        article = shared.get("selected_article", {})
+        ctx_head = (
+            f"Topic: {shared.get('topic', '?')}\n"
+            f"Article: {article.get('title', '?')}"
+        )
+        full = shared.get("script", "")
+        text = (
+            f"⚡ Imposer TA version du script\n\n{ctx_head}\n\n"
+            f"Envoie ta version COMPLÈTE en RÉPONSE à ce message "
+            f"(recommence par `### HOOK`).\n"
+            f"Elle remplace le script tel quel, SANS aucune validation : "
+            f"veille toi-même aux horaires `Plan N (T-Ts)` (Σ assets, I2V≈4s, "
+            f"T2V≈4s), aux lignes `VO:`/`Video:` et à la ligne `Audio:`.\n\n"
+            f"Script actuel :\n{full[:800]}"
+        )
+
+        event = _register_validation(base_vid)
+        msg_id = await send_telegram(text)
+        if msg_id:
+            _attach_message(base_vid, msg_id)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=self.timeout)
+        except asyncio.TimeoutError:
+            _pending_validations.pop(base_vid, None)
+            log.info(f"ScriptBoost {self.step_name}: timeout, no script imposed")
+            return json.dumps({"action": "cancel", "script": shared.get("script", "")})
+
+        entry = _pending_validations.pop(base_vid, {})
+        result = entry.get("result", "")
+        if not result.startswith("feedback:"):
+            log.info(f"ScriptBoost {self.step_name}: resolved without a script, cancelled")
+            return json.dumps({"action": "cancel", "script": shared.get("script", "")})
+
+        script = result[len("feedback:"):].strip()
+        if not script:
+            log.info(f"ScriptBoost {self.step_name}: empty script, cancelled")
+            return json.dumps({"action": "cancel", "script": shared.get("script", "")})
+
+        log.info(f"ScriptBoost {self.step_name}: imposed script ({len(script)} chars)")
+        return json.dumps({"action": "approve", "script": script})
+
+    async def post_async(self, shared, prep, exec):
+        try:
+            data = json.loads(exec)
+        except json.JSONDecodeError:
+            log.error(f"ScriptBoost {self.step_name}: invalid JSON")
+            shared["_current_step"] = f"{self.step_name}_done"
+            shared["steps"].append({
+                "step": self.step_name, "status": "ok",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "output": "boost JSON error, script unchanged",
+            })
+            await _set_state(**_shared_snapshot(shared))
+            return "cancel"
+
+        action = data.get("action", "cancel")
+        if action == "approve":
+            shared["script"] = data.get("script", shared.get("script", ""))
+            shared["_current_step"] = f"{self.step_name}_done"
+            shared["steps"].append({
+                "step": self.step_name, "status": "ok",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "output": f"script imposé par bypass ({len(shared['script'])} chars), validations ignorées",
+            })
+        else:
+            shared["_current_step"] = f"{self.step_name}_cancelled"
+            shared["steps"].append({
+                "step": self.step_name, "status": "cancelled",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "output": "aucun script imposé, retour à la validation",
+            })
+        await _set_state(**_shared_snapshot(shared))
+        return action

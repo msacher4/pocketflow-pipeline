@@ -677,7 +677,7 @@ async def tg_callback(request: Request):
     parts = data.split(":")
     action = parts[0]
 
-    if action in ("approve", "reject", "regen", "i2v", "edit", "route_normal", "route_alt"):
+    if action in ("approve", "reject", "regen", "i2v", "edit", "boost", "route_normal", "route_alt"):
         vid = parts[1] if len(parts) > 1 else ""
         slot_id = parts[2] if len(parts) > 2 else ""
         if slot_id:

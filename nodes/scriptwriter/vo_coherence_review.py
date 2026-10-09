@@ -76,14 +76,17 @@ class VoCoherenceReviewNode(AsyncNode):
             result = await self._ensure_structure_parity(shared, soul, ctx, result)
             result = await self._ensure_audit_coverage(shared, soul, ctx, result, llm_resp)
             after = result.get("script", "") if isinstance(result, dict) else ""
-            if after == before:
+            # Routage doux : si le filet nommage a demandé une régénération AltSG,
+            # on stoppe les retries LLM du review pour ce script fautif.
+            if after == before or shared.get("_route_review"):
                 break
-        final_script = result.get("script", "") if isinstance(result, dict) else ""
-        missing = self._missing_structure_lines(
-            self._input_script, final_script or "")
-        if missing:
-            raise RuntimeError(
-                f"VoCoherenceReview: structure encore altérée après filets: {missing}")
+        if not shared.get("_route_review"):
+            final_script = result.get("script", "") if isinstance(result, dict) else ""
+            missing = self._missing_structure_lines(
+                self._input_script, final_script or "")
+            if missing:
+                raise RuntimeError(
+                    f"VoCoherenceReview: structure encore altérée après filets: {missing}")
         log.info(f"VoCoherenceReview EXEC -> script length={len(result.get('script', ''))}, "
                  f"audit entries={len(result.get('audit') or [])}")
         return json.dumps(result, ensure_ascii=False)
@@ -135,6 +138,8 @@ class VoCoherenceReviewNode(AsyncNode):
         return [] if named else [1, 2]
 
     async def _ensure_character_named(self, shared, soul, ctx, decision):
+        if shared.get("_route_review"):
+            return decision
         character_name = self._character_name(shared)
         franchise_name = self._franchise_name(shared)
         script = decision.get("script", "")
@@ -151,18 +156,19 @@ class VoCoherenceReviewNode(AsyncNode):
         demands = []
         if missing:
             demands.append(
-                f"le nom EXACT '{character_name}' dans la VO du Plan 1 en priorité "
-                f"(Plan 2 seulement si vraiment impossible)")
+                f"le nom EXACT '{character_name}' dans la VO du Plan 1 "
+                f"(Plan 2 seulement si vraiment impossible), en raccourcissant "
+                f"le reste de la phrase si nécessaire")
         if missing_franchise:
             demands.append(
                 f"le nom EXACT de la franchise '{franchise_name}' dans la VO du "
-                f"Plan 1 (ou Plan 2) : le spectateur doit apprendre DE QUOI parle "
-                f"la vidéo")
+                f"Plan 1 ou du Plan 2 (idéalement celle du perso, pour que le "
+                f"spectateur sache DE QUOI parle la vidéo)")
         retry_ctx = (
             f"{ctx}\n\n--- RAPPEL HORS-RÈGLE ---\n"
             f"Des noms exigés par la validation manquent dans les VO. Insère "
             f"{' et '.join(demands)}, en compressant la phrase pour tenir dans "
-            f"la durée du plan (≈ 2 mots/sec), sans détruire le sens ni corriger "
+            f"la durée du plan (≈ 2 mots/sec), sans trahir le sens ni corriger "
             f"d'autres VOs. Retourne le JSON complet (audit + script corrigé)."
         )
         retry_resp = await call_llm(LLM_SCRIPTWRITER_ALT_MODEL, soul, retry_ctx, max_tokens=8192, timeout=600, temperature=0.2)
@@ -176,9 +182,18 @@ class VoCoherenceReviewNode(AsyncNode):
         if missing2 or missing_franchise2:
             log.error(f"VoCoherenceReview EXEC -> nommage toujours manquant "
                       f"(perso plans={missing2}, franchise absente={missing_franchise2})")
-            raise RuntimeError(
-                f"VoCoherenceReview: names still missing (character plans {missing2}, "
-                f"franchise missing={missing_franchise2})")
+            # Routage doux : on ne plante plus le pipeline ; on demande une
+            # régénération AltSG avec le défaut en feedback (comme le pydantic).
+            shared["_reformat_error"] = (
+                f"VoCoherenceReview: nommage toujours manquant après réécriture "
+                f"(perso plans={missing2}, franchise absente={missing_franchise2}). "
+                f"Exigences de la validation : la VO du Plan 1 (ou 2 au pire) doit "
+                f"contenir le nom exact '{character_name}' ; la franchise "
+                f"'{franchise_name}' doit apparaître dans une VO (idéalement celle "
+                f"du perso)."
+            )
+            shared["_route_review"] = "reformat_sg"
+            return retry_decision
         return retry_decision
 
     def _missing_audit_plans(self, script: str, audit) -> list:
@@ -208,6 +223,8 @@ class VoCoherenceReviewNode(AsyncNode):
         return original_lines
 
     async def _ensure_structure_parity(self, shared, soul, ctx, decision):
+        if shared.get("_route_review"):
+            return decision
         script = decision.get("script", "")
         missing = self._missing_structure_lines(self._input_script, script) if isinstance(script, str) else []
         if not missing:
@@ -232,6 +249,8 @@ class VoCoherenceReviewNode(AsyncNode):
         return retry_decision
 
     async def _ensure_audit_coverage(self, shared, soul, ctx, decision, llm_resp):
+        if shared.get("_route_review"):
+            return decision
         returned_script = decision.get("script", "")
         audit = decision.get("audit")
         missing = self._missing_audit_plans(returned_script, audit) if isinstance(returned_script, str) else list(range(99))
@@ -269,6 +288,38 @@ class VoCoherenceReviewNode(AsyncNode):
         return retry_decision
 
     async def post_async(self, shared, prep, exec):
+        # Routage doux : un filet (nommage) a demandé une régénération AltSG.
+        # On NE COMMIT PAS le script fautif et on renvoie la route, comme le
+        # pydantic (reformat_sg). Cap anti-boucle identique (`_sg_regens >= 6`).
+        if shared.get("_route_review"):
+            route = shared.pop("_route_review", None)
+            err = shared.get("_reformat_error", "VoCoherenceReview: nommage non conforme")
+            if shared.get("_sg_regens", 0) >= 6:
+                shared["_error"] = (
+                    f"VoCoherenceReview: nommage toujours manquant après "
+                    f"{shared.get('_sg_regens', 0)} régénérations AltSG"
+                )
+                shared["_current_step"] = "vo_coherence_review_error"
+                shared["steps"].append({
+                    "step": "vo_coherence_review", "status": "error",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "input": shared.get("script", "")[:500],
+                    "output": err[:5000],
+                })
+                await _set_state(**_shared_snapshot(shared, running=False))
+                await _set_traces(shared.get("_traces", {}))
+                return "error"
+            shared["_current_step"] = "vo_coherence_review_reformat"
+            shared["steps"].append({
+                "step": "vo_coherence_review", "status": "reformat",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "input": shared.get("script", "")[:500],
+                "output": err[:5000],
+            })
+            await _set_state(**_shared_snapshot(shared))
+            await _set_traces(shared.get("_traces", {}))
+            return route
+
         try:
             decision = json.loads(exec)
         except json.JSONDecodeError:

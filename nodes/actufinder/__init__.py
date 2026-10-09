@@ -27,7 +27,7 @@ def build_actufinder_flow() -> AsyncFlow:
     """
     fetch_all = FetchAllFeedsNode()
     filtrer = FilterArticlesNode()
-    cleanup = CleanupLlamaProxy()
+    cleanup = CleanupLlamaProxy(step="actufinder_cleanup_llama")
     decider = DeciderScoreNode()
     llm = LLMSelectNode()
     pv = PydanticAFValidationNode()

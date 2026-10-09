@@ -1,5 +1,5 @@
 from .send_node import TGSendValidationNode
-from .feedback_node import FeedbackInterpreterNode, ScriptEditFeedbackNode
+from .feedback_node import FeedbackInterpreterNode, ScriptEditFeedbackNode, ScriptBoostNode
 
 from pocketflow import AsyncFlow
 
@@ -112,6 +112,7 @@ def build_sw_alt_validation_flow() -> AsyncFlow:
         format_msg=_fmt_sw_alt,
         buttons_config=[
             [("Approve -> AssetFinder", "approve")],
+            [("⚡ Imposer mon script (bypass)", "boost")],
             [("✏️ Éditer le script", "edit")],
             [("Rejeter avec feedback", "reject")],
         ],
@@ -123,8 +124,10 @@ def build_sw_alt_validation_flow() -> AsyncFlow:
         allowed_targets=["scriptwriter_alt"],
     )
     edit = ScriptEditFeedbackNode(step_name="validate_sw_alt")
+    boost = ScriptBoostNode(step_name="validate_sw_alt_boost")
     send - "reject" >> feedback
     send - "edit" >> edit
+    send - "boost" >> boost
     return AsyncFlow(start=send)
 
 

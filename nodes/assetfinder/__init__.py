@@ -29,7 +29,7 @@ from nodes.validation import build_af_validation_flow
 def build_assetfinder_flow() -> AsyncFlow:
     init = InitCleanup()
     ap = AssetPlannerNode()
-    cleanup = CleanupLlamaProxy()
+    cleanup = CleanupLlamaProxy(step="assetfinder_cleanup_llama")
     mp = MontagePlannerNode()
 
     svg = SDCppVideoGenerator()

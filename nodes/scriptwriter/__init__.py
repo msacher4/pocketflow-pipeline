@@ -38,6 +38,10 @@ def build_alt_scriptwriter_flow() -> AsyncFlow:
         outputs=["script", "_feedback_attempts", "script_feedback", "user_feedback"],
     )
     think >> brainstorm >> sg >> vo_review >> pv >> validate
+    # Routage doux du VoCoherenceReview : si son filet de nommage échoue (perso
+    # ou franchise absents des VO après réécriture), on régénère via AltSG au
+    # lieu de lever une erreur fatale (run 20261008_142828 bloqué en RuntimeError).
+    vo_review - "reformat_sg" >> sg
     # Routage vers le NODE FUSIONNÉ UNIQUE : toutes les erreurs réparables
     # (VO trop longue ET Video: fautive bracket/statique/headcount JEV) →
     # ScriptFixer (réécriture ciblée + AUTO-validation des corrections).
@@ -56,4 +60,8 @@ def build_alt_scriptwriter_flow() -> AsyncFlow:
     # Édition directe (✏️) : le script édité repasse par la gate pydantic, puis
     # re-validation Telegram (approve) avant de repartir vers AssetFinder.
     validate - "edit" >> pv
+    # Boost (⚡) : si l'utilisateur clique « Imposer mon script » mais ne colle
+    # aucune réponse (timeout), on revient à l'attente de validation — jamais
+    # d'enchaînement vers AssetFinder sans script explicite.
+    validate - "cancel" >> validate
     return AsyncFlow(start=think)
