@@ -9,6 +9,8 @@ venv/
 # ==== Runtime / artefacts de pipeline ====
 downloads/
 output/
+# dataset d'entraînement (données runtime, non versionnées)
+datasets/
 # gros tests vidéo
 tests/t2v_isolated/
 

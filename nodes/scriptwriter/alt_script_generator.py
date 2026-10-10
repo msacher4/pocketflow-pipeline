@@ -198,6 +198,11 @@ class AltScriptGeneratorNode(AsyncNode):
                 log.info(f"AltSG -> Audio verrouillé sur '{found_audio}' (1er script)")
 
         shared["script"] = raw_script
+        # Tout script fraîchement généré est, par défaut, approuvé "tel quel" :
+        # on réarme la source pour qu'un tag "edit"/"boost"/"feedback" d'une
+        # passe précédente (annulée par une régénération) ne fuite pas dans le
+        # dataset d'entraînement.
+        shared["_script_source"] = "approve"
         # Script neuf = budget de réparations neuf : le compteur pydantic compte
         # les défauts du script COURANT, pas du run entier (sinon 4 défauts
         # différents — même réparés — tuent le run). Garde-fou global anti-boucle

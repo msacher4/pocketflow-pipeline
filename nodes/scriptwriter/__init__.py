@@ -4,6 +4,7 @@ from .vo_coherence_review import VoCoherenceReviewNode
 from .thinking_agent import ThinkingAgentNode
 from .pydantic_validation import PydanticScriptValidationNode, AltPydanticScriptValidationNode
 from .script_fixer import ScriptFixerNode
+from .dataset_collector import DatasetCollectorNode
 from nodes.validation.brainstorm_node import BrainstormValidationNode
 
 from pocketflow import AsyncFlow
@@ -32,10 +33,11 @@ def build_alt_scriptwriter_flow() -> AsyncFlow:
     vo_review = VoCoherenceReviewNode()
     pv = AltPydanticScriptValidationNode()
     fixer = ScriptFixerNode()
+    collector = DatasetCollectorNode()
     validate = ValidationSubFlowNode(
         "validate_sw_alt", build_sw_alt_validation_flow,
-        inputs=["topic", "selected_article", "script", "_feedback_attempts"],
-        outputs=["script", "_feedback_attempts", "script_feedback", "user_feedback"],
+        inputs=["topic", "selected_article", "script", "_feedback_attempts", "_script_source"],
+        outputs=["script", "_feedback_attempts", "script_feedback", "user_feedback", "_script_source"],
     )
     think >> brainstorm >> sg >> vo_review >> pv >> validate
     # Routage doux du VoCoherenceReview : si son filet de nommage échoue (perso
@@ -57,6 +59,8 @@ def build_alt_scriptwriter_flow() -> AsyncFlow:
     # reboucle sur le node avec l'erreur exacte au lieu d'accepter à tort.
     fixer - "refix" >> fixer
     validate - "scriptwriter_alt" >> sg
+    # Capture dataset : point de convergence UNIQUE de tous les approve alt.
+    validate - "approve" >> collector
     # Édition directe (✏️) : le script édité repasse par la gate pydantic, puis
     # re-validation Telegram (approve) avant de repartir vers AssetFinder.
     validate - "edit" >> pv

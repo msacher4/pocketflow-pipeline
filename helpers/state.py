@@ -141,3 +141,18 @@ def _save_sub_shared(name: str, sub: dict):
 
 def _get_sub_shared(name: str) -> dict:
     return copy.deepcopy(_sub_shared_stores.get(name, {}))
+
+
+# Sub-shareds "live" : référence (sans deepcopy) vers le dict `sub` d'un
+# SubFlowNode en cours d'exécution. Permet d'exposer article + thinking_agent
+# en temps réel pendant le run (ex: capture manuelle d'une VO générée à la
+# main), là où `_save_sub_shared` n'est appelé qu'à la fin du sous-flow.
+_LIVE_SUB_SHARED: dict[str, dict] = {}
+
+
+def _set_live_sub(name: str, sub: dict) -> None:
+    _LIVE_SUB_SHARED[name] = sub
+
+
+def _get_live_sub(name: str) -> dict:
+    return _LIVE_SUB_SHARED.get(name, {})

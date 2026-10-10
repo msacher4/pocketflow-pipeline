@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pocketflow import AsyncNode, AsyncFlow
 
 from config import TG_VALIDATION_TIMEOUT
-from helpers.state import _set_state, _get_state, _shared_snapshot, _save_sub_shared
+from helpers.state import _set_state, _get_state, _shared_snapshot, _save_sub_shared, _set_live_sub
 from helpers.call_agent import reset_agents
 from helpers.send_telegram import send_and_wait_validation
 log = logging.getLogger("pocketflow-pipeline")
@@ -128,6 +128,7 @@ class SubFlowNode(AsyncNode):
 
     async def exec_async(self, sub):
         flow = self.flow_builder()
+        _set_live_sub(self.step_name, sub)  # expose le contexte en temps réel
         action = await flow.run_async(sub)
         return action, sub
 

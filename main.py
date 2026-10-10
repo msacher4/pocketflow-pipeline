@@ -20,7 +20,7 @@ from helpers.state import (
     _get_history, _push_history,
     _get_traces,
     _resolve_validation, _resolve_validation_by_message, _cleanup_stale_validations,
-    _get_sub_shared, set_auto_approve, is_auto_approve,
+    _get_sub_shared, _get_live_sub, set_auto_approve, is_auto_approve,
 )
 from helpers.send_telegram import send_telegram
 from helpers.call_llm import log
@@ -536,6 +536,9 @@ async def get_flow():
 @app.get("/api/state/sub/{step_name}")
 async def get_sub_shared(step_name: str):
     sub = _get_sub_shared(step_name)
+    if not sub:
+        # Sous-flow en cours : exposer le contexte live (article, thinking_agent).
+        sub = copy.deepcopy(_get_live_sub(step_name))
     safe = {}
     for k, v in sub.items():
         if k in HIDDEN_KEYS:
@@ -551,6 +554,43 @@ async def get_sub_shared(step_name: str):
 async def get_step_traces(step: str):
     traces = await _get_traces()
     return traces.get(step, {})
+
+
+@app.post("/api/dataset/add")
+async def dataset_add(request: Request):
+    """Capture manuelle d'une VO générée à la main (hors pipeline).
+
+    Body JSON : {"script": "VO: ...\\n...", "pipeline_id"?: ..., "topic"?: ...,
+    "article"?: {...} | "selected_article"?: {...}, "thinking_agent"?: {...},
+    "source"?: "manual"}.
+    Contexte manquant complété depuis le sub-shared live/sauvé
+    `scriptwriter_alt`, puis le shared parent (`selected_article`, `topic`).
+    """
+    from helpers.dataset import add_manual_example
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "message": "JSON invalide"}, status_code=400)
+    script = (body.get("script") or "").strip()
+    if not script:
+        return JSONResponse({"status": "error", "message": "script requis"}, status_code=400)
+    ctx = dict(body)
+    sub = _get_sub_shared("scriptwriter_alt") or copy.deepcopy(_get_live_sub("scriptwriter_alt"))
+    if "thinking_agent" not in ctx and sub.get("thinking_agent"):
+        ctx["thinking_agent"] = sub["thinking_agent"]
+    if "selected_article" not in ctx and "article" not in ctx:
+        if sub.get("selected_article"):
+            ctx["selected_article"] = sub["selected_article"]
+        elif isinstance(_CURRENT_SHARED, dict) and _CURRENT_SHARED.get("selected_article"):
+            ctx["selected_article"] = _CURRENT_SHARED["selected_article"]
+    if "topic" not in ctx:
+        ctx["topic"] = sub.get("topic") or (isinstance(_CURRENT_SHARED, dict) and _CURRENT_SHARED.get("topic")) or ""
+    if "pipeline_id" not in ctx:
+        ctx["pipeline_id"] = sub.get("pipeline_id") or (isinstance(_CURRENT_SHARED, dict) and _CURRENT_SHARED.get("pipeline_id")) or ""
+    rec = add_manual_example(script, ctx, source=body.get("source", "manual"))
+    if rec is None:
+        return JSONResponse({"status": "error", "message": "aucune VO extraite ou écriture échouée"}, status_code=422)
+    return {"status": "ok", "id": rec["id"], "vo_count": len(rec["vo_lines"])}
 
 
 @app.post("/api/state/trigger")

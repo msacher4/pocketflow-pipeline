@@ -199,6 +199,8 @@ class FeedbackInterpreterNode(AsyncNode):
             target = self.default_target
 
         if action == "approve":
+            if self.step_name == "validate_sw_alt":
+                shared["_script_source"] = "feedback"
             remaining = shared.get("_pending_reject_queue", [])
             if remaining:
                 shared["_pending_reject_queue"] = remaining
@@ -351,6 +353,11 @@ class ScriptEditFeedbackNode(AsyncNode):
             log.warning(f"ScriptEdit {self.step_name}: edited script invalid ({str(e)[:120]}), "
                         "fallback feedback régénération")
 
+        if not shared.get("_edit_error"):
+            # Édition conservée (elle passe la gate pydantic) : le script approuvé
+            # en aval vient de l'utilisateur, pas du générateur.
+            shared["_script_source"] = "edit"
+
         return json.dumps({"action": "edit", "script": merged})
 
     async def post_async(self, shared, prep, exec):
@@ -466,6 +473,7 @@ class ScriptBoostNode(AsyncNode):
         action = data.get("action", "cancel")
         if action == "approve":
             shared["script"] = data.get("script", shared.get("script", ""))
+            shared["_script_source"] = "boost"
             shared["_current_step"] = f"{self.step_name}_done"
             shared["steps"].append({
                 "step": self.step_name, "status": "ok",

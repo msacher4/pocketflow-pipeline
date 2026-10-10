@@ -60,6 +60,7 @@ NODE_TYPES = {
     "validate_sw":              {"icon": "👤", "label": "Validation SW",        "model": "Telegram"},
     "validate_sw_alt":          {"icon": "👤", "label": "Validation SW (alt)",  "model": "Telegram"},
     "validate_sw_alt_boost":    {"icon": "⚡", "label": "Boost script (bypass)", "model": "Telegram"},
+    "dataset_collector":        {"icon": "💾", "label": "Dataset VO",           "model": ""},
     # AssetFinder subflow
     "asset_planner":            {"icon": "📋", "label": "AssetPlanner",         "model": "qwen-opus"},
     "asset_planner_alt":        {"icon": "📋", "label": "Planner Alt (2x I2V)", "model": "qwen-opus"},
